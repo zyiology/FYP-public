@@ -27,12 +27,36 @@ from engine import _get_iou_types
 from torchvision.models.detection.roi_heads import keypointrcnn_loss, keypointrcnn_inference
 from torchvision.models.detection.faster_rcnn import FasterRCNN
 
+from torchvision.models.detection import fasterrcnn_resnet50_fpn
+
 # need to modify roiheads?
 class CustomFasterRCNN(FasterRCNN):
 
     def __init__(self, backbone, num_classes=None, **kwargs):
         super().__init__(backbone, num_classes, **kwargs)
-        self.roi_heads = None # define my own?
+        # self.roi_heads = None # define my own?
+
+        # taken from faster_rcnn.py
+        representation_size = 1024
+
+        num_attributes = 2  # TODO FIX THIS
+
+        # Replace roi_heads with your own MyRoiHead instance
+        # Use the attributes initialized by the FasterRCNN constructor
+        self.roi_heads = MyRoIHead(
+            box_roi_pool=self.roi_heads.box_roi_pool,
+            box_head=self.roi_heads.box_head,
+            box_predictor=CustomFastRCNNPredictor(representation_size, num_classes, num_attributes),
+            box_fg_iou_thresh=self.roi_heads.box_fg_iou_thresh,
+            box_bg_iou_thresh=self.roi_heads.box_bg_iou_thresh,
+            box_batch_size_per_image=self.roi_heads.box_batch_size_per_image,
+            box_positive_fraction=self.roi_heads.box_positive_fraction,
+            bbox_reg_weights=self.roi_heads.bbox_reg_weights,
+            box_score_thresh=self.roi_heads.box_score_thresh,
+            box_nms_thresh=self.roi_heads.box_nms_thresh,
+            box_detections_per_img=self.roi_heads.box_detections_per_img,
+            # ... other arguments as needed ...
+        )
 
     # from generalized_rcnn
     def forward(self, images, targets=None):
