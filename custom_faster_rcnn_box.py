@@ -43,9 +43,6 @@ class CustomFasterRCNN(FasterRCNN):
 
         # taken from faster_rcnn.py
         representation_size = 1024
-        num_heads = 2
-
-        attribute_dims = {"material":4, "type":6}
 
         # Replace roi_heads with your own MyRoiHead instance
         # Use the attributes initialized by the FasterRCNN constructor
@@ -53,8 +50,7 @@ class CustomFasterRCNN(FasterRCNN):
             attribute_weights=attribute_weights,
             box_roi_pool=self.roi_heads.box_roi_pool,
             box_head=self.roi_heads.box_head,
-            box_predictor=self.roi_heads.box_predictor, #CustomFastRCNNPredictor(representation_size, num_classes, num_attributes),
-            attribute_predictor=AttributePredictor(input_dim=representation_size, num_heads=num_heads, attribute_dims=attribute_dims),
+            box_predictor=CustomFastRCNNPredictor(representation_size, num_classes, num_attributes),
             fg_iou_thresh=self.roi_heads.proposal_matcher.high_threshold,
             bg_iou_thresh=self.roi_heads.proposal_matcher.low_threshold,
             batch_size_per_image=self.roi_heads.fg_bg_sampler.batch_size_per_image,
@@ -232,10 +228,9 @@ def custom_fasterrcnn_resnet50_fpn(
 
 
 class MyRoIHead(RoIHeads):
-    def __init__(self, attribute_weights=None, attribute_predictor=None, *args, **kwargs):
+    def __init__(self, attribute_weights=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.attribute_weights = attribute_weights
-        self.attribute_predictor = attribute_predictor
         # can add extra params if needed here
 
     # features is a dictionary, each value is a tensor of features from 1 image
@@ -252,7 +247,6 @@ class MyRoIHead(RoIHeads):
                     assert t["keypoints"].dtype == torch.float32, "target keypoints must of float type"
 
         if self.training:
-            # TODO fix attributes retrieval to be a dictionary in targets
             proposals, matched_idxs, labels, attributes, regression_targets = (
                 self.select_training_samples(proposals, targets))
         else:
@@ -261,13 +255,11 @@ class MyRoIHead(RoIHeads):
             regression_targets = None
             matched_idxs = None
 
-        # output of this, by default, is 7*7 (defined in faster_rcnn) *out_channels of backbone (resnet50_fpn)
-        box_features = self.box_roi_pool(features, proposals, image_shapes) 
-        box_features = self.box_head(box_features) # this is the step that flattens the feature vector
+        box_features = self.box_roi_pool(features, proposals, image_shapes)
+        box_features = self.box_head(box_features)
 
         # need to make sure box_predictor is a CustomFastRCNNPredictor
-        class_logits, box_regression = self.box_predictor(box_features)
-        attributes_logits_dict = self.attribute_predictor(box_features) 
+        class_logits, attribute_logits, box_regression = self.box_predictor(box_features)
         # print("class logits:", class_logits)
         # print("attrib logits:", attribute_logits)
 
@@ -278,7 +270,7 @@ class MyRoIHead(RoIHeads):
         if self.training:
             assert labels is not None and attributes is not None and regression_targets is not None
             loss_classifier, loss_box_reg, loss_attribute = (
-                fastrcnn_loss_with_attributes(class_logits, attribute_logits_dict, box_regression,
+                fastrcnn_loss_with_attributes(class_logits, attribute_logits, box_regression,
                                               labels, attributes, self.attribute_weights, regression_targets))
             losses = {"loss_classifier": loss_classifier, "loss_box_reg": loss_box_reg,
                       "loss_attribute": loss_attribute}
@@ -554,83 +546,6 @@ class CustomFastRCNNPredictor(nn.Module):
 
         return scores, attributes, bbox_deltas
 
-class AttributePredictor(nn.Module):
-    def __init__(self, input_dim, num_heads, attribute_dims):
-        """
-        input_dim: The dimension of the input vector from the RoI pooling layer.
-        num_heads: Number of heads in the MultiheadAttention mechanism.
-        attribute_dims: A dictionary where keys are attribute names and values are their dimensions.
-        """
-        super(AttributePredictor, self).__init__()
-        
-        self.attention = nn.MultiheadAttention(input_dim, num_heads)
-        self.attribute_predictors = nn.ModuleDict({
-            attr: nn.Linear(input_dim, dim) for attr, dim in attribute_dims.items()
-        })
-
-    def forward(
-        self, 
-        x # type: Tensor 
-    ):
-    # type: (...) -> Dict[str, Tensor]
-        """
-        x: The input tensor of shape (seq_len, batch, input_dim) for MultiheadAttention.
-        """
-        # Assuming x is already in the right shape for MultiheadAttention.
-        # You might need to adjust this depending on how your data is structured.
-        attn_output, _ = self.attention(x, x, x)
-        
-        # Assuming the output of the attention mechanism is pooled or aggregated
-        # appropriately into a shape (batch, input_dim) for processing by the
-        # attribute predictors. Adjust pooling/aggregation as needed.
-        pooled_output = torch.mean(attn_output, dim=0)
-        
-        attributes = {attr: predictor(pooled_output) for attr, predictor in self.attribute_predictors.items()}
-        
-        return attributes
-
-# LSTM VERSION 
-# class AttributePredictor(nn.Module):
-#     def __init__(self, in_channels, hidden_size, num_attributes, seq_length):
-#         super().__init__()
-#         self.lstm = nn.LSTM(in_channels, hidden_size, batch_first=True)
-#         # self.attribute_pred = nn.Linear(hidden_size, num_attributes)
-#         self.seq_length = seq_length
-
-#     def forward(self, x):
-#         # takes as input a tensor x of shape [batch_size, in_channels, 1, 1]
-#         # If x has four dimensions, checks that the last two dimensions are both 1
-#         if x.dim() == 4:
-#             assert list(x.shape[2:]) == [1, 1]
-
-#         # flatten x from the second dimension onwards, resulting in a tensor of shape [batch_size, in_channels]
-#         x = x.flatten(start_dim=1)
-
-#         # Assuming x is of shape [batch, in_channels], we need to add a sequence dimension
-#         # LSTM expects input of shape (batch, seq_len, input_size), so reshape x accordingly
-#         x = x.unsqueeze(1).repeat(1, self.seq_length, 1)  # Repeat features for each time step
-        
-#         # Forward through LSTM
-#         lstm_out, (hn, cn) = self.lstm(x)  # lstm_out shape: [batch, seq_length, hidden_size]
-        
-#         # Predict attributes for each time step
-#         attributes = self.attribute_pred(lstm_out)  # attributes shape: [batch, seq_length, num_attributes]
-        
-#         return attributes
-    
-    # def __init__(self, in_channels, num_attributes):
-    #     super().__init__()
-    #     self.attribute_pred = nn.Linear(in_channels, num_attributes)
-
-    # def forward(self, x):
-    #     if x.dim() == 4:
-    #         assert list(x.shape[2:]) == [1, 1]
-    #     x = x.flatten(start_dim=1)
-    #     attributes = self.attribute_pred(x)
-
-    #     return attributes
-
-
 
 # class WeightedFocalLoss(nn.Module):
 #     "Non weighted version of Focal Loss"
@@ -647,14 +562,14 @@ class AttributePredictor(nn.Module):
 #         F_loss = at*(1-pt)**self.gamma * BCE_loss
 #         return F_loss.mean()
 
-def fastrcnn_loss_with_attributes(class_logits, attribute_logits_dict, box_regression, labels, attributes, attribute_weights, regression_targets):
-    # type: (Tensor, Dict[str, Tensor], Tensor, List[Tensor], List[Tensor], Tensor, List[Tensor]) -> Tuple[Tensor, Tensor, Tensor]
+def fastrcnn_loss_with_attributes(class_logits, attribute_logits, box_regression, labels, attributes, attribute_weights, regression_targets):
+    # type: (Tensor, Tensor, Tensor, List[Tensor], List[Tensor], Tensor, List[Tensor]) -> Tuple[Tensor, Tensor, Tensor]
     """
     Computes the loss for Faster R-CNN.
 
     Args:
         class_logits (Tensor)
-        attribute_logits_dict (Dict[str, Tensor])
+        attribute_logits (Tensor)
         box_regression (Tensor)
         labels (list[BoxList])
         attributes (list[BoxList])

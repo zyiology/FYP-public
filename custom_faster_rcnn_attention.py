@@ -41,11 +41,11 @@ class CustomFasterRCNN(FasterRCNN):
         super().__init__(backbone, num_classes, **kwargs)
         # self.roi_heads = None # define my own?
 
-        # taken from faster_rcnn.py
-        representation_size = 1024
+        channels = backbone.out_channels
         num_heads = 2
-
         attribute_dims = {"material":4, "type":6}
+        # default values for output from RoI pooling
+        height, width = 7, 7        
 
         # Replace roi_heads with your own MyRoiHead instance
         # Use the attributes initialized by the FasterRCNN constructor
@@ -54,7 +54,12 @@ class CustomFasterRCNN(FasterRCNN):
             box_roi_pool=self.roi_heads.box_roi_pool,
             box_head=self.roi_heads.box_head,
             box_predictor=self.roi_heads.box_predictor, #CustomFastRCNNPredictor(representation_size, num_classes, num_attributes),
-            attribute_predictor=AttributePredictor(input_dim=representation_size, num_heads=num_heads, attribute_dims=attribute_dims),
+            attribute_predictor=AttributePredictor(
+                channels=channels,
+                num_heads=num_heads,
+                attribute_dims=attribute_dims,
+                height=height,
+                width=width),
             fg_iou_thresh=self.roi_heads.proposal_matcher.high_threshold,
             bg_iou_thresh=self.roi_heads.proposal_matcher.low_threshold,
             batch_size_per_image=self.roi_heads.fg_bg_sampler.batch_size_per_image,
@@ -232,10 +237,11 @@ def custom_fasterrcnn_resnet50_fpn(
 
 
 class MyRoIHead(RoIHeads):
-    def __init__(self, attribute_weights=None, attribute_predictor=None, *args, **kwargs):
+    def __init__(self, attribute_weights=None, attribute_predictor=None, self_attention=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.attribute_weights = attribute_weights
         self.attribute_predictor = attribute_predictor
+        self.self_attention = self_attention
         # can add extra params if needed here
 
     # features is a dictionary, each value is a tensor of features from 1 image
@@ -247,7 +253,8 @@ class MyRoIHead(RoIHeads):
                 floating_point_types = (torch.float, torch.double, torch.half)
                 assert t["boxes"].dtype in floating_point_types, "target boxes must of float type"
                 assert t["labels"].dtype == torch.int64, "target labels must of int64 type"
-                assert t["attributes"].dtype == torch.int64, "target attributes must of int64 type"
+                for attr_value in t["attributes"].values():
+                    assert attr_value.dtype == torch.int64, "target attributes must of int64 type"
                 if self.has_keypoint():
                     assert t["keypoints"].dtype == torch.float32, "target keypoints must of float type"
 
@@ -263,13 +270,14 @@ class MyRoIHead(RoIHeads):
 
         # output of this, by default, is 7*7 (defined in faster_rcnn) *out_channels of backbone (resnet50_fpn)
         box_features = self.box_roi_pool(features, proposals, image_shapes) 
-        box_features = self.box_head(box_features) # this is the step that flattens the feature vector
+
+        reduced_box_features = self.box_head(box_features) # this is the step that flattens the feature vector
 
         # need to make sure box_predictor is a CustomFastRCNNPredictor
-        class_logits, box_regression = self.box_predictor(box_features)
+        class_logits, box_regression = self.box_predictor(reduced_box_features)
         attributes_logits_dict = self.attribute_predictor(box_features) 
-        # print("class logits:", class_logits)
-        # print("attrib logits:", attribute_logits)
+        # attributes_logits_dict will look something like {"material":tensor([0.1,0.2,0.3,0.1]), "type":tensor([0.02,0.04])}
+        # so targets["attributes"] should look like 
 
         # new feature here, using potentially box_features
 
@@ -284,22 +292,23 @@ class MyRoIHead(RoIHeads):
                       "loss_attribute": loss_attribute}
             #print(losses)
         else:
-            boxes, scores, labels, attribute_score, attribute_label = self.postprocess_detections_with_attributes(class_logits,
-                                                                                            attribute_logits,
-                                                                                            box_regression,
-                                                                                            proposals,
-                                                                                            image_shapes)
+            boxes, scores, labels, attribute_score_dict, attribute_label_dict = self.postprocess_detections_with_attributes(
+                class_logits,
+                attribute_logits,
+                box_regression,
+                proposals,
+                image_shapes)
             num_images = len(boxes)
             for i in range(num_images):
-                result.append(
-                    {
-                        "boxes": boxes[i],
-                        "labels": labels[i],
-                        "scores": scores[i],
-                        "attribute_score": attribute_score[i],
-                        "attribute_label": attribute_label[i]
-                    }
-                )
+                current = {
+                    "boxes": boxes[i],
+                    "labels": labels[i],
+                    "scores": scores[i],
+                }
+                for key in attribute_score_dict.keys():
+                    current[key + "_score"] = attribute_score_dict[key][i]
+                    current[key + "_label"] = attribute_label_dict[key][i]
+                result.append(current)
 
         # probably not important for my implementation, no keypoints
         # keep none checks in if conditional so torchscript will conditionally
@@ -369,7 +378,7 @@ class MyRoIHead(RoIHeads):
         proposals = self.add_gt_proposals(proposals, gt_boxes)
 
         # get matching gt indices for each proposal
-        matched_idxs, labels, attributes = (
+        matched_idxs, labels, attributes_dicts = (
             self.assign_targets_to_proposals_with_attributes(proposals, gt_boxes, gt_labels, gt_attributes))
         # sample a fixed proportion of positive-negative proposals
         sampled_inds = self.subsample(labels)
@@ -379,7 +388,8 @@ class MyRoIHead(RoIHeads):
             img_sampled_inds = sampled_inds[img_id]
             proposals[img_id] = proposals[img_id][img_sampled_inds]
             labels[img_id] = labels[img_id][img_sampled_inds]
-            attributes[img_id] = attributes[img_id][img_sampled_inds]
+            for value in attributes[img_id].values():
+                value = value[img_sampled_inds]
             matched_idxs[img_id] = matched_idxs[img_id][img_sampled_inds]
 
             gt_boxes_in_image = gt_boxes[img_id]
@@ -391,12 +401,13 @@ class MyRoIHead(RoIHeads):
         return proposals, matched_idxs, labels, attributes, regression_targets
 
     def assign_targets_to_proposals_with_attributes(self, proposals: List[Tensor], gt_boxes: List[Tensor],
-                                                    gt_labels: List[Tensor], gt_attributes: List[Tensor]
-                                                    ) -> Tuple[List[Tensor], List[Tensor], List[Tensor]]:
+                                                    gt_labels: List[Tensor], gt_attributes: List[Dict[str, Tensor]]
+                                                    ) -> Tuple[List[Tensor], List[Tensor], List[Dict[str, Tensor]]]:
 
         matched_idxs = []
         labels = []
         attributes = []
+        attribute_types = gt_attributes[0].keys()
         for proposals_in_image, gt_boxes_in_image, gt_labels_in_image, gt_attrib_in_image in (
                 zip(proposals, gt_boxes, gt_labels, gt_attributes)):
 
@@ -407,7 +418,7 @@ class MyRoIHead(RoIHeads):
                     (proposals_in_image.shape[0],), dtype=torch.int64, device=device
                 )
                 labels_in_image = torch.zeros((proposals_in_image.shape[0],), dtype=torch.int64, device=device)
-                attrib_in_image = torch.zeros((proposals_in_image.shape[0],), dtype=torch.int64, device=device)
+                attrib_in_image = {at: torch.zeros((proposals_in_image.shape[0],), dtype=torch.int64, device=device) for at in attribute_types}
             else:
                 #  set to self.box_similarity when https://github.com/pytorch/pytorch/issues/27495 lands
                 match_quality_matrix = box_ops.box_iou(gt_boxes_in_image, proposals_in_image)
@@ -417,18 +428,21 @@ class MyRoIHead(RoIHeads):
 
                 labels_in_image = gt_labels_in_image[clamped_matched_idxs_in_image]
                 labels_in_image = labels_in_image.to(dtype=torch.int64)
-                attrib_in_image = gt_attrib_in_image[clamped_matched_idxs_in_image]
-                attrib_in_image = attrib_in_image.to(dtype=torch.int64)
+                attrib_in_image = {k: v[clamped_matched_idxs_in_image].to(dtype=torch.int64) for k, v in gt_attrib_in_image.items()}
+                #attrib_in_image = gt_attrib_in_image[clamped_matched_idxs_in_image]
+                #attrib_in_image = attrib_in_image.to(dtype=torch.int64)
 
                 # Label background (below the low threshold)
                 bg_inds = matched_idxs_in_image == self.proposal_matcher.BELOW_LOW_THRESHOLD
                 labels_in_image[bg_inds] = 0
-                attrib_in_image[bg_inds] = 0
+                for value in attrib_in_image.values():
+                    value[bg_inds] = 0
 
                 # Label ignore proposals (between low and high thresholds)
                 ignore_inds = matched_idxs_in_image == self.proposal_matcher.BETWEEN_THRESHOLDS
                 labels_in_image[ignore_inds] = -1  # -1 is ignored by sampler
-                attrib_in_image[ignore_inds] = -1
+                for value in attrib_in_image.values():
+                    value[ignore_inds] = -1
 
             matched_idxs.append(clamped_matched_idxs_in_image)
             labels.append(labels_in_image)
@@ -438,7 +452,7 @@ class MyRoIHead(RoIHeads):
     def postprocess_detections_with_attributes(
             self,
             class_logits,  # type: Tensor
-            attribute_logits,  # type: Tensor  # Add attribute logits as an input
+            attribute_logits,  # type: Dict[str,Tensor]
             box_regression,  # type: Tensor
             proposals,  # type: List[Tensor]
             image_shapes,  # type: List[Tuple[int, int]]
@@ -451,21 +465,23 @@ class MyRoIHead(RoIHeads):
         pred_boxes = self.box_coder.decode(box_regression, proposals)
 
         pred_scores = F.softmax(class_logits, -1)
-        pred_attributes = F.softmax(attribute_logits, -1)  # Apply softmax to attribute logits
+        pred_attributes = {key:F.softmax(val, -1) for key,val in attribute_logits}  # Apply softmax to attribute logits
 
         pred_boxes_list = pred_boxes.split(boxes_per_image, 0)
         pred_scores_list = pred_scores.split(boxes_per_image, 0)
-        pred_attributes_list = pred_attributes.split(boxes_per_image, 0)  # Split attribute predictions
+        pred_attributes_list_dict = {key:val.split(boxes_per_image, 0) for key,val in pred_attributes}  # Split attribute predictions
 
         all_boxes = []
         all_scores = []
         all_labels = []
-        all_attribute_score = []  # List to store all attribute scores
-        all_attribute_label = []  # List to store all attribute labels
+        all_attribute_score_dict = {key:[] for key in pred_attributes_list_dict.keys()}  # store all attribute scores
+        all_attribute_label_dict = {key:[] for key in pred_attributes_list_dict.keys()}  # store all attribute labels
 
         # each iteration corresponds to per-image processing
-        for boxes, scores, attributes, image_shape in zip(pred_boxes_list, pred_scores_list, pred_attributes_list,
-                                                          image_shapes):
+        for idx, (boxes, scores, image_shape) in enumerate(zip(pred_boxes_list, pred_scores_list, image_shapes)):
+            
+            attributes_dict = {key:val[idx] for key,val in pred_attributes_list_dict}
+
             boxes = box_ops.clip_boxes_to_image(boxes, image_shape)
 
             # create labels for each prediction
@@ -474,16 +490,28 @@ class MyRoIHead(RoIHeads):
 
             # find the attribute with highest probability that's not background
             # its index is equal to its index in the attribute logits + 1
-            attribute_label = torch.argmax(attributes[:, 1:], dim=1) + 1
+            attribute_label_dict = {key:torch.argmax(val[:, 1:], dim=1) + 1 for key,val in attributes_dict}
 
             # get the score of the attribute with the highest probability
-            # The torch.max function actually returns a tuple of two tensors: the maximum values and the indices of the maximum values. By adding [0] at the end of the statement, we are selecting only the first element of the tuple, which is the tensor of maximum values.
-            attribute_score = torch.max(attributes[:, 1:], dim=1)[0]
+            # The torch.max function actually returns a tuple of two tensors: 
+            # the maximum values and the indices of the maximum values. 
+            # By adding [0] at the end of the statement, we are selecting only 
+            # the first element of the tuple, which is the tensor of maximum values.
+            attribute_score_dict = {key:torch.max(val[:, 1:], dim=1)[0] for key,val in attributes_dict}
 
             # squeeze attribute_label and attribute_score into one column, then repeat by num_classes
             # so that each box will have an associated attribute label and score, that can be processed in the same way as the class labels and scores
-            attribute_label = attribute_label.unsqueeze(1).repeat(1, num_classes)
-            attribute_score = attribute_score.unsqueeze(1).repeat(1, num_classes)
+            # why do we have to do this? the original faster rcnn generates one box per class per proposal
+            # but we're only generating one attribute prediction per proposal - so to ensure each box has a corresponding
+            # attribute, have to repeat by number of classes
+            # why is there one box per class per proposal? so that the model can learn how to refine the bounding box
+            # for each class
+            # to improve refinement of bounding box, could perhaps generate one box per class per attribute per proposal,
+            # but i think the tradeoffs are not worth it
+            for key in attribute_label_dict:
+                attribute_label_dict[key] = attribute_label_dict[key].unsqueeze(1).repeat(1, num_classes)
+                attribute_score_dict[key] = attribute_score_dict[key].unsqueeze(1).repeat(1, num_classes)
+            #attribute_label = attribute_label.unsqueeze(1).repeat(1, num_classes)
 
             # process attribute predictions
             # Assuming one attribute per box, reshape if needed
@@ -495,37 +523,53 @@ class MyRoIHead(RoIHeads):
             boxes = boxes[:, 1:]
             scores = scores[:, 1:]
             labels = labels[:, 1:]
-            attribute_label = attribute_label[:, 1:]
-            attribute_score = attribute_score[:, 1:]
+            for key in attribute_label_dict:
+                attribute_label_dict[key] = attribute_label_dict[key][:, 1:]
+                attribute_score_dict[key] = attribute_score_dict[key][:, 1:]
+            # attribute_label = attribute_label[:, 1:]
+            # attribute_score = attribute_score[:, 1:]
 
             # batch everything, by making every class prediction be a separate instance
             boxes = boxes.reshape(-1, 4)
             scores = scores.reshape(-1)
             labels = labels.reshape(-1)
-            attribute_label = attribute_label.reshape(-1)
-            attribute_score = attribute_score.reshape(-1)
+            for key in attribute_label_dict:
+                attribute_label_dict[key] = attribute_label_dict[key].reshape(-1)
+                attribute_score_dict[key] = attribute_score_dict[key].reshape(-1)
+            # attribute_label = attribute_label.reshape(-1)
+            # attribute_score = attribute_score.reshape(-1)
 
             # remove low scoring boxes
             inds = torch.where(scores > self.score_thresh)[0]
-            boxes, scores, labels, attribute_label, attribute_score = boxes[inds], scores[inds], labels[inds], attribute_label[inds], attribute_score[inds]
+            boxes, scores, labels= boxes[inds], scores[inds], labels[inds]
+            for key in attribute_label_dict:
+                attribute_label_dict[key] = attribute_label_dict[key][inds]
+                attribute_score_dict[key] = attribute_score_dict[key][inds]
 
             # remove empty boxes
             keep = box_ops.remove_small_boxes(boxes, min_size=1e-2)
-            boxes, scores, labels, attribute_label, attribute_score = boxes[keep], scores[keep], labels[keep], attribute_label[keep], attribute_score[keep]
+            boxes, scores, labels = boxes[keep], scores[keep], labels[keep]
+            for key in attribute_label_dict:
+                attribute_label_dict[key] = attribute_label_dict[key][keep]
+                attribute_score_dict[key] = attribute_score_dict[key][keep]
 
             # non-maximum suppression, independently done per class
             keep = box_ops.batched_nms(boxes, scores, labels, self.nms_thresh)
             # keep only topk scoring predictions
             keep = keep[: self.detections_per_img]
-            boxes, scores, labels, attribute_label, attribute_score = boxes[keep], scores[keep], labels[keep], attribute_label[keep], attribute_score[keep]
+            boxes, scores, labels = boxes[keep], scores[keep], labels[keep]
+            for key in attribute_label_dict:
+                attribute_label_dict[key] = attribute_label_dict[key][keep]
+                attribute_score_dict[key] = attribute_score_dict[key][keep]
 
             all_boxes.append(boxes)
             all_scores.append(scores)
             all_labels.append(labels)
-            all_attribute_score.append(attribute_score)  # Append attributes for each image
-            all_attribute_label.append(attribute_label) 
+            for key in all_attribute_score_dict.keys():
+                all_attribute_score_dict[key].append(attribute_score_dict[key])  # Append attributes for each image
+                all_attribute_label_dict[key].append(attribute_label_dict[key]) 
 
-        return all_boxes, all_scores, all_labels, all_attribute_score, all_attribute_label  # Return attributes along with other detections
+        return all_boxes, all_scores, all_labels, all_attribute_score_dict, all_attribute_label_dict  # Return attributes along with other detections
 
 
 class CustomFastRCNNPredictor(nn.Module):
@@ -555,17 +599,24 @@ class CustomFastRCNNPredictor(nn.Module):
         return scores, attributes, bbox_deltas
 
 class AttributePredictor(nn.Module):
-    def __init__(self, input_dim, num_heads, attribute_dims):
+    def __init__(self, channels, num_heads, attribute_dims, height, width):
         """
-        input_dim: The dimension of the input vector from the RoI pooling layer.
+        channels: The number of channels in the input tensor.
         num_heads: Number of heads in the MultiheadAttention mechanism.
         attribute_dims: A dictionary where keys are attribute names and values are their dimensions.
+        height, width: Dimensions of the spatial layout of the tensor before flattening.
         """
         super(AttributePredictor, self).__init__()
+        self.channels = channels
+        self.height = height
+        self.width = width
+        self.flattened_dim = height * width * channels  # New flattened dimension
         
-        self.attention = nn.MultiheadAttention(input_dim, num_heads)
+        self.attention = nn.MultiheadAttention(channels, num_heads)
+        
+        # Update attribute predictors with the new flattened_dim
         self.attribute_predictors = nn.ModuleDict({
-            attr: nn.Linear(input_dim, dim) for attr, dim in attribute_dims.items()
+            attr: nn.Linear(self.flattened_dim, dim) for attr, dim in attribute_dims.items()
         })
 
     def forward(
@@ -576,16 +627,33 @@ class AttributePredictor(nn.Module):
         """
         x: The input tensor of shape (seq_len, batch, input_dim) for MultiheadAttention.
         """
+
+        batch_size, c, h, w = x.size()
+        assert c == self.channels and h == self.height and w == self.width, \
+            f"Input tensor dimensions (channels, height, width) must be ({self.channels}, {self.height}, {self.width}), but got ({c}, {h}, {w})"
+
+        seq_len = height * width
+        input_dim = channels
+
+        # Reshape and permute `x` to shape (seq_len, batch, input_dim)
+        x = x.permute(2, 3, 0, 1).reshape(seq_len, batch, input_dim)
+
+        # add positional encodings to tensor before
+        positional_encodings = positional_encoding_2d(height, width, channels).to(x.device)
+        positional_encodings = positional_encodings.view(height * width, 1, channels).expand(-1, batch_size, -1)
+
+        pe_x = x + positional_encodings
+
         # Assuming x is already in the right shape for MultiheadAttention.
         # You might need to adjust this depending on how your data is structured.
-        attn_output, _ = self.attention(x, x, x)
+        attn_output, _ = self.attention(pe_x, pe_x, pe_x)
         
         # Assuming the output of the attention mechanism is pooled or aggregated
         # appropriately into a shape (batch, input_dim) for processing by the
         # attribute predictors. Adjust pooling/aggregation as needed.
-        pooled_output = torch.mean(attn_output, dim=0)
-        
-        attributes = {attr: predictor(pooled_output) for attr, predictor in self.attribute_predictors.items()}
+        flattened_output = attn_output.permute(1, 0, 2).contiguous().view(batch_size, -1)
+    
+        attributes = {attr: predictor(flattened_output) for attr, predictor in self.attribute_predictors.items()}
         
         return attributes
 
@@ -648,7 +716,7 @@ class AttributePredictor(nn.Module):
 #         return F_loss.mean()
 
 def fastrcnn_loss_with_attributes(class_logits, attribute_logits_dict, box_regression, labels, attributes, attribute_weights, regression_targets):
-    # type: (Tensor, Dict[str, Tensor], Tensor, List[Tensor], List[Tensor], Tensor, List[Tensor]) -> Tuple[Tensor, Tensor, Tensor]
+    # type: (Tensor, Dict[str, Tensor], Tensor, List[Tensor], List[Dict[str,Tensor], Tensor, List[Tensor]) -> Tuple[Tensor, Tensor, Tensor]
     """
     Computes the loss for Faster R-CNN.
 
@@ -656,8 +724,8 @@ def fastrcnn_loss_with_attributes(class_logits, attribute_logits_dict, box_regre
         class_logits (Tensor)
         attribute_logits_dict (Dict[str, Tensor])
         box_regression (Tensor)
-        labels (list[BoxList])
-        attributes (list[BoxList])
+        labels (list[Tensor])
+        attributes (list[Dict[str,Tensor]])
         regression_targets (Tensor)
 
     Returns:
@@ -666,14 +734,29 @@ def fastrcnn_loss_with_attributes(class_logits, attribute_logits_dict, box_regre
     """
 
     labels = torch.cat(labels, dim=0)
-    attributes = torch.cat(attributes, dim=0)
+    
+    attribute_types = attributes[0].keys()
+    for dictionary in attributes:
+        assert dictionary.keys() == attribute_types, "All attribute dictionaries should have the same keys"
 
-    # get indices of attributes that are not background
-    attributes_nonzero = torch.nonzero(attributes, as_tuple=True)[0] # returns a tuple of tensors, get the first one
+    # merge the dictionaries by key, concatenating the values
+    attributes = {key: torch.stack([dictionary[key] for dictionary in attributes], dim=0) for key in attribute_types}
 
-    # filter out the non-background attribute logits and labels
-    attribute_logits = attribute_logits[attributes_nonzero, :]
-    attributes = attributes[attributes_nonzero]
+    # check if all attribute tensors have the same length
+    attribute_lengths = [attribute.size(0) for attribute in attributes.values()]
+    assert all(length == attribute_lengths[0] for length in attribute_lengths), "All attribute tensors should have the same length"
+
+    # get indices of attributes that are not background, then filter out the non-background attribute logits and labels
+    # do this for each type of attribute
+    for key, val in attributes.items():
+        val_nonzero = torch.nonzero(val, as_tuple=True)[0]
+
+        attribute_logits[key] = attribute_logits[key][val_nonzero, :]
+        val = val[val_nonzero]
+
+    # attributes_nonzero = torch.nonzero(attributes, as_tuple=True)[0] # returns a tuple of tensors, get the first one    
+    # attribute_logits = attribute_logits[attributes_nonzero, :]
+    # attributes = attributes[attributes_nonzero]
 
     regression_targets = torch.cat(regression_targets, dim=0)
 
@@ -683,29 +766,36 @@ def fastrcnn_loss_with_attributes(class_logits, attribute_logits_dict, box_regre
     # attribute_loss = (F.cross_entropy(attribute_logits, attributes, weight=attribute_weights, reduction='sum') /
     #                   len(attributes))
 
+    # calculate attribute loss, summing up for each attribute
     # focal loss
-
     # alpha = attribute_weights
     alpha = 0.25
     gamma = 2
-    ce_loss = F.cross_entropy(attribute_logits, attributes, reduction='none')
-    pt = torch.exp(-ce_loss)
+    total_attribute_loss = 0
+    
+    for key in attribute_types:
+        attrib_logits = attribute_logits_dict[key]
+        attrib = attributes[key]
 
-    if (type(alpha) == torch.Tensor and len(alpha)>1):
-        # Index alpha with the class labels to get a tensor of size N
-        alpha_selected = alpha[attributes]
-        # Ensure focal_factor is broadcastable with ce_loss
-        # ce_loss is of size N, so we squeeze focal_factor to match this shape
-        focal_factor = (1 - pt) ** gamma
-        focal_factor = focal_factor.squeeze()
+        ce_loss = F.cross_entropy(attribute_logits, attributes, reduction='none')
+        pt = torch.exp(-ce_loss)
 
-        # Compute the focal loss
-        focal_loss = alpha_selected * focal_factor * ce_loss
-    else:
-        focal_loss = alpha * (1 - pt) ** gamma * ce_loss
+        if (type(alpha) == torch.Tensor and len(alpha)>1):
+            # Index alpha with the class labels to get a tensor of size N
+            alpha_selected = alpha[attributes]
+            # Ensure focal_factor is broadcastable with ce_loss
+            # ce_loss is of size N, so we squeeze focal_factor to match this shape
+            focal_factor = (1 - pt) ** gamma
+            focal_factor = focal_factor.squeeze()
 
-    # Average the loss over the batch
-    attribute_loss = focal_loss.mean()
+            # Compute the focal loss
+            focal_loss = alpha_selected * focal_factor * ce_loss
+        else:
+            focal_loss = alpha * (1 - pt) ** gamma * ce_loss
+
+        # Average the loss over the batch
+        attribute_loss = focal_loss.mean()
+        total_attribute_loss += attribute_loss
 
     # attribute_loss = (alpha * (1 - pt) ** gamma * ce_loss).mean()  # mean over the batch
 
@@ -747,7 +837,7 @@ def fastrcnn_loss_with_attributes(class_logits, attribute_logits_dict, box_regre
     )
     box_loss = box_loss / labels.numel()
 
-    return classification_loss, box_loss, attribute_loss
+    return classification_loss, box_loss, total_attribute_loss
 
 # yet to be fixed
 @torch.inference_mode()
@@ -812,6 +902,32 @@ def convert_to_xywh(boxes):
     xmin, ymin, xmax, ymax = boxes.unbind(1)
     return torch.stack((xmin, ymin, xmax - xmin, ymax - ymin), dim=1)
 
+def positional_encoding_2d(H, W, D):
+    """
+    Generate a 2D positional encoding.
+    
+    Parameters:
+    - H: Height of the tensor.
+    - W: Width of the tensor.
+    - D: Depth of the feature dimension, should be divisible by 2 for this encoding.
+    
+    Returns:
+    - A tensor of shape [H, W, D] with positional encodings.
+    """
+    if D % 2 != 0:
+        raise ValueError("Depth D should be divisible by 2.")
+    
+    # Compute the positional encodings
+    pe = np.zeros((H, W, D))
+    position_y = np.arange(H).reshape(-1, 1, 1)
+    position_x = np.arange(W).reshape(1, -1, 1)
+    div_term = np.exp(np.arange(0, D, 2) * -(np.log(10000.0) / D))
+    
+    pe[:, :, 0::2] = np.sin(position_y * div_term) + np.sin(position_x * div_term)  # Even indices
+    pe[:, :, 1::2] = np.cos(position_y * div_term) + np.cos(position_x * div_term)  # Odd indices
+    
+    pe = torch.tensor(pe, dtype=torch.float32)
+    return pe
 
 class AttribEvaluator(CocoEvaluator):
     def __init__(self, dataset_name, iou_types):
