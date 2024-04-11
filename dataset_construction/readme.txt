@@ -18,3 +18,6 @@ download_gsv.ahk is an autohotkey script to automatically download GSV images fr
 it "manually" copies and pastes the images from the google sheets into an open excel file, then saves the image
 (quite tedious, but google sheets does not have image download functionality as far as I'm aware, and this was the
 most convenient way to automate the downloading)
+
+annotations for mapillary dataset and GSV dataset are stored in respective .json files
+created using CVAT - can be recreated by uploading images to cvat and uploading corresponding annotation file

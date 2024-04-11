@@ -25,3 +25,5 @@ baseline_custom.py is used to test the trained baseline model on the test set
 ALL SCRIPTS WERE RUN ON A SLURM CLUSTER, using sbatch to submit scripts
 so sys.argv was used in most of the .py files to keep track of the job ID in the cluster
 if not running on a slurm cluster, have to edit those files
+
+conda environment can be recreated from frcnn_environment.yml
