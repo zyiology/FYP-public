@@ -1,0 +1,33 @@
+{
+  "category": {
+    "Unknown": 0,
+    "Non-engineered multi-family home or hotel": 1,
+    "Single Family House": 2,
+    "Engineered commercial building": 3,
+    "Low-rise masonry strip mall": 4,
+    "Low-rise masonry warehouse/industrial building": 5,
+    "Engineered residential building": 6,
+    "Pre-Engineered metal building - medium": 7,
+    "Pre-Engineered metal building - large": 8,
+    "Pre-Engineered metal building - small": 9
+  },
+  "occupancy_group": {
+    "Unknown": 0,
+    "AGR": 1,
+    "COM": 2,
+    "EDU": 3,
+    "IND": 4,
+    "GOV": 5,
+    "REL": 6,
+    "RES": 7,
+    "Other": 8
+  },
+  "roof_covers": {
+    "Unknown": 0,
+    "Built up roof": 1,
+    "Gable": 2,
+    "Metal roof cover": 3,
+    "Shingles": 4,
+    "Single ply membrane": 5
+  }
+}

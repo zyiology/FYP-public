@@ -1,0 +1,98 @@
+{
+  "category": {
+    "Unknown": 0,
+    "Non-engineered multi-family home or hotel": 1,
+    "Single Family House": 2,
+    "Engineered commercial building": 3,
+    "Low-rise masonry strip mall": 4,
+    "Low-rise masonry warehouse/industrial building": 5,
+    "Engineered residential building": 6,
+    "Pre-Engineered metal building - medium": 7,
+    "Pre-Engineered metal building - large": 8,
+    "Pre-Engineered metal building - small": 9
+  },
+  "occupancy_group": {
+    "Unknown": 0,
+    "AGR": 1,
+    "COM": 2,
+    "EDU": 3,
+    "IND": 4,
+    "GOV": 5,
+    "REL": 6,
+    "RES": 7,
+    "Other": 8
+  },
+  "occupancy_type": {
+    "Unknown": 0,
+    "COM1": 2,
+    "COM2": 3,
+    "COM3": 4,
+    "COM4": 5,
+    "COM5": 6,
+    "COM6": 7,
+    "COM7": 8,
+    "COM8": 9,
+    "COM9": 10,
+    "EDU1": 11,
+    "EDU2": 12,
+    "GOV1": 13,
+    "GOV2": 14,
+    "IND1": 15,
+    "IND2": 16,
+    "IND3": 17,
+    "IND4": 18,
+    "IND5": 19,
+    "IND6": 20,
+    "REL": 21,
+    "RES1": 22,
+    "RES2": 23,
+    "RES3": 24,
+    "RES4": 25,
+    "RES5": 26
+  },
+  "no_floors": {
+    "Unknown": 0,
+    "1": 1,
+    "2": 2,
+    "3": 3,
+    "4": 4,
+    "5": 5,
+    "6 or more": 6
+  },
+  "basement": {
+    "No": 0,
+    "Yes": 1
+  },
+  "material": {
+    "Unknown": 0,
+    "Concrete": 1,
+    "Masonry": 2,
+    "Steel": 3,
+    "Wood": 4
+  },
+  "roof_shape": {
+    "Unknown": 0,
+    "Flat": 1,
+    "Gable": 2,
+    "Hip": 3
+  },
+  "roof_covers": {
+    "Unknown": 0,
+    "Built up roof": 1,
+    "Gable": 2,
+    "Metal roof cover": 3,
+    "Shingles": 4,
+    "Single ply membrane": 5
+  },
+  "shutters": {
+    "No": 0,
+    "Yes": 1
+  },
+  "window_area": {
+    "Unknown": 0,
+    "50% or more of surface": 1,
+    "About 20% of surface": 2,
+    "About 33% of surface": 3,
+    "Much less than 20%": 4
+  }
+}
