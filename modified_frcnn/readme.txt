@@ -27,3 +27,14 @@ so sys.argv was used in most of the .py files to keep track of the job ID in the
 if not running on a slurm cluster, have to edit those files
 
 conda environment can be recreated from frcnn_environment.yml
+
+# squeeze attribute_label and attribute_score into one column, then repeat by num_classes
+            # so that each box will have an associated attribute label and score, that can be processed in the same way as the class labels and scores
+            # why do we have to do this? the original faster rcnn generates one box per class per proposal
+            # but we're only generating one attribute prediction per proposal - so to ensure each box has a corresponding
+            # attribute, have to repeat by number of classes
+            # why is there one box per class per proposal? so that the model can learn how to refine the bounding box
+            # for each class
+            # to improve refinement of bounding box, could perhaps generate one box per class per attribute per proposal,
+            # but i think the tradeoffs are not worth it
+            # TODO write this in documentation instead
