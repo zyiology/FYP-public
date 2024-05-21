@@ -7,7 +7,6 @@ import warnings
 from collections import OrderedDict
 from typing import Tuple, List, Dict, Optional
 from os.path import join
-from coco_eval import CocoEvaluator
 import matplotlib.pyplot as plt
 import torch
 from torch import nn, Tensor
@@ -30,6 +29,7 @@ from pycocotools import mask as coco_mask
 # from local files
 from engine import _get_iou_types
 from attrib_eval import AttribEvaluator
+from coco_eval import CocoEvaluator
 
 # main class for modified Faster R-CNN
 class CustomFasterRCNN(FasterRCNN):
@@ -62,21 +62,23 @@ class CustomFasterRCNN(FasterRCNN):
         resolution = self.roi_heads.box_roi_pool.output_size[0]
         representation_size = 1024
 
-        # TODO sort out attributes_head_params
         attributes_head_params = {"resolution": resolution,
                                   "representation_size": representation_size,
-                                  "out_channels": channels}
+                                  "out_channels": channels,
+                                  "num_heads": num_heads,
+                                  "height": height,
+                                  "width": width}
 
         # Replace roi_heads with CustomRoIHead instance, which incorporates attribute prediction
         # Use the attributes initialized by the FasterRCNN constructor
         self.roi_heads = CustomRoIHead(
             attribute_weights_dict=attribute_weights_dict,
             attribute_predictor=AttributesPredictor(
-                channels=channels,
-                num_heads=num_heads,
+                # channels=channels,
+                # num_heads=num_heads,
                 attribute_mappings=attribute_mappings,
-                height=height,
-                width=width,
+                # height=height,
+                # width=width,
                 use_attention = use_attention,
                 attention_per_attrib=attention_per_attrib,
                 attributes_head_params = attributes_head_params,
@@ -110,9 +112,9 @@ class CustomFasterRCNN(FasterRCNN):
             targets (list[Dict[str, Tensor]]): ground-truth boxes present in the image (optional)
 
         Returns:
-            result (list[BoxList] or dict[Tensor]): the output from the model.
-                During training, it returns a dict[Tensor] which contains the losses.
-                During testing, it returns list[dict[Tensor]], where each dict contains the results for an image
+            result (dict[str, Tensor] or list[dict[str, Tensor]]): the output from the model.
+                During training, it returns a dict[str, Tensor] which contains the losses.
+                During testing, it returns list[dict[str, Tensor]], where each dict contains the results for an image
         """
         if self.training and targets is None:
             raise ValueError("In training mode, targets should be passed")
@@ -192,7 +194,6 @@ model_urls = {
     "fasterrcnn_mobilenet_v3_large_320_fpn_coco": "https://download.pytorch.org/models/fasterrcnn_mobilenet_v3_large_320_fpn-907ea3f9.pth",
     "fasterrcnn_mobilenet_v3_large_fpn_coco": "https://download.pytorch.org/models/fasterrcnn_mobilenet_v3_large_fpn-fb6a3cc7.pth",
 }
-
 
 # adapted from fasterrcnn_resnet50_fpn in torchvision
 def custom_fasterrcnn_resnet_fpn(
@@ -371,49 +372,49 @@ class CustomRoIHead(RoIHeads):
         #         and self.keypoint_head is not None
         #         and self.keypoint_predictor is not None
         # ):
-            keypoint_proposals = [p["boxes"] for p in result]
-            if self.training:
-                # during training, only focus on positive boxes
-                num_images = len(proposals)
-                keypoint_proposals = []
-                pos_matched_idxs = []
-                assert matched_idxs is not None
-                for img_id in range(num_images):
-                    pos = torch.where(labels[img_id] > 0)[0]
-                    keypoint_proposals.append(proposals[img_id][pos])
-                    pos_matched_idxs.append(matched_idxs[img_id][pos])
-            else:
-                pos_matched_idxs = None
+        #     keypoint_proposals = [p["boxes"] for p in result]
+        #     if self.training:
+        #         # during training, only focus on positive boxes
+        #         num_images = len(proposals)
+        #         keypoint_proposals = []
+        #         pos_matched_idxs = []
+        #         assert matched_idxs is not None
+        #         for img_id in range(num_images):
+        #             pos = torch.where(labels[img_id] > 0)[0]
+        #             keypoint_proposals.append(proposals[img_id][pos])
+        #             pos_matched_idxs.append(matched_idxs[img_id][pos])
+        #     else:
+        #         pos_matched_idxs = None
 
-            keypoint_features = self.keypoint_roi_pool(features, keypoint_proposals, image_shapes)
-            keypoint_features = self.keypoint_head(keypoint_features)
-            keypoint_logits = self.keypoint_predictor(keypoint_features)
+        #     keypoint_features = self.keypoint_roi_pool(features, keypoint_proposals, image_shapes)
+        #     keypoint_features = self.keypoint_head(keypoint_features)
+        #     keypoint_logits = self.keypoint_predictor(keypoint_features)
 
-            loss_keypoint = {}
-            if self.training:
-                assert targets is not None
-                assert pos_matched_idxs is not None
+        #     loss_keypoint = {}
+        #     if self.training:
+        #         assert targets is not None
+        #         assert pos_matched_idxs is not None
 
-                gt_keypoints = [t["keypoints"] for t in targets]
-                rcnn_loss_keypoint = keypointrcnn_loss(
-                    keypoint_logits, keypoint_proposals, gt_keypoints, pos_matched_idxs
-                )
-                loss_keypoint = {"loss_keypoint": rcnn_loss_keypoint}
-            else:
-                assert keypoint_logits is not None
-                assert keypoint_proposals is not None
+        #         gt_keypoints = [t["keypoints"] for t in targets]
+        #         rcnn_loss_keypoint = keypointrcnn_loss(
+        #             keypoint_logits, keypoint_proposals, gt_keypoints, pos_matched_idxs
+        #         )
+        #         loss_keypoint = {"loss_keypoint": rcnn_loss_keypoint}
+        #     else:
+        #         assert keypoint_logits is not None
+        #         assert keypoint_proposals is not None
 
-                keypoints_probs, kp_scores = keypointrcnn_inference(keypoint_logits, keypoint_proposals)
-                for keypoint_prob, kps, r in zip(keypoints_probs, kp_scores, result):
-                    r["keypoints"] = keypoint_prob
-                    r["keypoints_scores"] = kps
+        #         keypoints_probs, kp_scores = keypointrcnn_inference(keypoint_logits, keypoint_proposals)
+        #         for keypoint_prob, kps, r in zip(keypoints_probs, kp_scores, result):
+        #             r["keypoints"] = keypoint_prob
+        #             r["keypoints_scores"] = kps
 
-            losses.update(loss_keypoint)
+        #     losses.update(loss_keypoint)
 
         return result, losses
 
     # selects an equal proportion of positive/negative proposals to avoid class imbalance
-    # modified to retrieve attribute classes from the ground truth
+    # modified from original RoIHeads to retrieve attribute classes from the ground truth
     def select_training_samples(
         self,
         proposals,  # type: List[Tensor]
@@ -456,7 +457,8 @@ class CustomRoIHead(RoIHeads):
         regression_targets = self.box_coder.encode(matched_gt_boxes, proposals)
 
         return proposals, matched_idxs, labels, attribute_dicts, regression_targets
-
+    
+    # modified from original RoIHeads to include attributes
     def assign_targets_to_proposals_with_attributes(self, proposals: List[Tensor], gt_boxes: List[Tensor],
                                                     gt_labels: List[Tensor], gt_attributes: List[Dict[str, Tensor]]
                                                     ) -> Tuple[List[Tensor], List[Tensor], List[Dict[str, Tensor]]]:
@@ -490,7 +492,6 @@ class CustomRoIHead(RoIHeads):
                 attrib_in_image = {k: v.to(dtype=torch.int64) for k,v in attrib_in_image.items()}
 
                 # Label background (below the low threshold)
-                
                 bg_inds = matched_idxs_in_image == self.proposal_matcher.BELOW_LOW_THRESHOLD
                 labels_in_image[bg_inds] = 0
                 for value in attrib_in_image.values():
@@ -542,7 +543,6 @@ class CustomRoIHead(RoIHeads):
         for idx, (boxes, scores, image_shape) in enumerate(zip(pred_boxes_list, pred_scores_list, image_shapes)):
             
             attributes_dict = {key:val[idx] for key,val in pred_attributes_list_dict.items()}
-
             boxes = box_ops.clip_boxes_to_image(boxes, image_shape)
 
             # create labels for each prediction
@@ -560,16 +560,9 @@ class CustomRoIHead(RoIHeads):
             # the first element of the tuple, which is the tensor of maximum values.
             attribute_score_dict = {key:torch.max(val[:, 1:], dim=1)[0] for key,val in attributes_dict.items()}
 
-            # squeeze attribute_label and attribute_score into one column, then repeat by num_classes
-            # so that each box will have an associated attribute label and score, that can be processed in the same way as the class labels and scores
-            # why do we have to do this? the original faster rcnn generates one box per class per proposal
-            # but we're only generating one attribute prediction per proposal - so to ensure each box has a corresponding
-            # attribute, have to repeat by number of classes
-            # why is there one box per class per proposal? so that the model can learn how to refine the bounding box
-            # for each class
-            # to improve refinement of bounding box, could perhaps generate one box per class per attribute per proposal,
-            # but i think the tradeoffs are not worth it
-            # TODO write this in documentation instead
+            # there is one box per class per proposal, but only one attribute prediction per proposal
+            # so to ensure each box has a corresponding attribute, have to repeat by number of classes
+            # refer to documentation for extended explanation
             for key in attribute_label_dict:
                 attribute_label_dict[key] = attribute_label_dict[key].unsqueeze(1).repeat(1, num_classes)
                 attribute_score_dict[key] = attribute_score_dict[key].unsqueeze(1).repeat(1, num_classes)
@@ -624,14 +617,18 @@ class CustomRoIHead(RoIHeads):
 
         return all_boxes, all_scores, all_labels, all_attribute_score_dict, all_attribute_label_dict  # Return attributes along with other detections
 
-
+# replaces the default class and bounding box predictor in Faster R-CNN
+# implements a self-attention layer between the proposal tensor and the final classification and bounding box regression layers
 class CustomFastRCNNPredictor(nn.Module):
     """
     Standard classification + bounding box regression layers
     for Fast R-CNN.
 
     Args:
-        in_channels (int): number of input channels
+        channels (int): number of input channels
+        num_heads (int): number of self-attention heads
+        height, width (int): height and width of input feature map
+        hidden_dim (int): number of hidden units in the feedforward layers
         num_classes (int): number of output classes (including background)
     """
 
@@ -663,90 +660,89 @@ class CustomFastRCNNPredictor(nn.Module):
         # Reshape and permute `x` to shape (seq_len, batch, input_dim)
         x = x.permute(2, 3, 0, 1).reshape(seq_len, batch_size, input_dim)
 
-        # add positional encodings to tensor before
+        # add positional encodings to tensor before attention
         positional_encodings = positional_encoding_2d(h, w, c).to(x.device)
         positional_encodings = positional_encodings.view(h * w, 1, c).expand(-1, batch_size, -1)
-
         pe_x = x + positional_encodings
 
+        # pass through self-attention layer, then feedforward layer
         attn_output, _ = self.attention(pe_x, pe_x, pe_x)
         flattened_output = attn_output.permute(1, 0, 2).contiguous().view(batch_size, -1)
-
         reduced_output = self.feed_forward(flattened_output)
         
-        # if x.dim() == 4:
-        #     assert list(x.shape[2:]) == [1, 1]
-        # x = x.flatten(start_dim=1)
+        # pass through classification and bounding box regression layers
         scores = self.cls_score(reduced_output)
         bbox_deltas = self.bbox_pred(reduced_output)
 
         return scores, bbox_deltas
     
-class AttributesPredictor(nn.Module):
-    def __init__(self, channels, num_heads, attribute_mappings, height, width, use_attention=True, attention_per_attrib=True, use_reduced_features_for_attrib=False, attributes_head_params=None):
+class AttributesPredictor(nn.Module): # channels, num_heads, height, width,
+    def __init__(self, attribute_mappings, use_attention=True, attention_per_attrib=True, use_reduced_features_for_attrib=False, attributes_head_params=None):
         """
-        channels: The number of channels in the input tensor.
-        num_heads: Number of heads in the MultiheadAttention mechanism.
-        attribute_mappings: A dictionary where keys are attribute names and values are their dimensions.
-        height, width: Dimensions of the spatial layout of the tensor before flattening.
+        channels (int): The number of channels in the input tensor.
+        num_heads (int): Number of heads in the MultiheadAttention mechanism.
+        attribute_mappings (dict[dict[str, int]]): A dictionary where keys are attribute names and values are the corresponding mappings.
+        height, width (int): Dimensions of the spatial layout of the tensor before flattening.
+        use_attention (bool): Whether to use self-attention for attribute prediction.
+        attention_per_attrib (bool): Whether to use a separate attention layer for each attribute. If false, a single attention layer is used for all attributes.
+        use_reduced_features_for_attrib (bool): Whether to use reduced features for attribute prediction. If true, don't pass the features through the TwoMLPHead module
+        attributes_head_params (dict): Parameters for the TwoMLPHead module. Required if use_attention and use_reduced_features_for_attrib is false.
         """
 
         if use_reduced_features_for_attrib:
             assert not use_attention, "cannot use attention if reduced_features are used"
 
         super(AttributesPredictor, self).__init__()
-        self.channels = channels
-        self.height = height
-        self.width = width
-        self.flattened_dim = height * width * channels  # New flattened dimension
+
+        assert "out_channels" in attributes_head_params.keys(), "when instantiating AttributesPredictor, must provide out_channels in attributes_head_params"
+        assert "height" in attributes_head_params.keys(), "when instantiating AttributesPredictor, must provide height in attributes_head_params"
+        assert "width" in attributes_head_params.keys(), "when instantiating AttributesPredictor, must provide width in attributes_head_params"
+
+        self.channels = attributes_head_params["out_channels"]
+        self.height = attributes_head_params["height"]
+        self.width = attributes_head_params["width"]
+        self.flattened_dim = self.height * self.width * self.channels  # New flattened dimension
         self.reduced_dim = 1024 # could move this to be an input if so desired
         self.attention_per_attrib = attention_per_attrib
         self.use_attention = use_attention
         self.use_reduced_features_for_attrib = use_reduced_features_for_attrib
         
         if use_attention:
+            assert "num_heads" in attributes_head_params.keys(), "if use_attention is true when instantiating AttributesPredictor, must provide num_heads in attributes_head_params"
             if attention_per_attrib:
                 self.attentions = nn.ModuleDict({
-                    attr: AttribAttention(channels, num_heads, self.flattened_dim, self.reduced_dim) for attr in attribute_mappings.keys()
+                    attr: AttribAttention(self.channels, attributes_head_params["num_heads"], self.flattened_dim, self.reduced_dim) for attr in attribute_mappings.keys()
                 })
-                # self.attentions = nn.ModuleDict({
-                #     attr: nn.MultiheadAttention(channels, num_heads) for attr in attribute_mappings.keys()
-                # })
             else:
-                self.attention = AttribAttention(channels, num_heads, self.flattened_dim, self.reduced_dim)
-                # self.attention = nn.MultiheadAttention(channels, num_heads)
+                self.attention = AttribAttention(self.channels, attributes_head_params["num_heads"], self.flattened_dim, self.reduced_dim)
             self.attribute_predictors = nn.ModuleDict({
                 attr: nn.Linear(self.reduced_dim, len(vals)) for attr, vals in attribute_mappings.items()
             })
             
             
         else:
-            assert attributes_head_params is not None, "if use_attention is false and use_reduced_features_for_attrib is false when instantiating AttributesPredictor, must provided params for attributes_head"
+            assert "representation_size" in attributes_head_params.keys(), "if use_attention is false is false when instantiating AttributesPredictor, must provide representation_size in attributes_head_params"
         
             representation_size = attributes_head_params["representation_size"]
             if not use_reduced_features_for_attrib:
-                # same code as box_head for faster rcnn, to reduce 
+                assert "resolution" in attributes_head_params.keys(), "if use_attention is false and use_reduced_features_for_attrib is false when instantiating AttributesPredictor, must provide resolution in attributes_head_params"
+                assert "out_channels" in attributes_head_params.keys(), "if use_attention is false and use_reduced_features_for_attrib is false when instantiating AttributesPredictor, must provide out_channels in attributes_head_params"
                 resolution, out_channels = attributes_head_params["resolution"], attributes_head_params["out_channels"]
                 self.non_attn_heads = nn.ModuleDict({
                     attr: TwoMLPHead(out_channels * resolution**2, representation_size) for attr in attribute_mappings.keys()
-                    # attr: CNNandTwoMLPHead(out_channels, representation_size) for attr in attribute_mappings.keys()
                 })
-                # self.non_attn_head = TwoMLPHead(out_channels * resolution**2, representation_size)
 
             self.attribute_predictors = nn.ModuleDict({
                 attr: nn.Linear(representation_size, len(vals)) for attr, vals in attribute_mappings.items()
             })
-        
-        
+            
+        return
 
     def forward(
         self, 
         x # type: Tensor 
     ):
     # type: (...) -> Dict[str, Tensor]
-        """
-        x: The input tensor of shape (seq_len, batch, input_dim) for MultiheadAttention.
-        """
 
         if self.use_attention:
 
@@ -773,23 +769,11 @@ class AttributesPredictor(nn.Module):
                 for attr in self.attentions.keys():
                     attn_output = self.attentions[attr](pe_x)
                     attributes[attr] = self.attribute_predictors[attr](attn_output)
-                    # attn_output, _ = attention(pe_x, pe_x, pe_x)  # attention weights for heads discarded
-                    
-                    # # Assuming the output of the attention mechanism is pooled or aggregated
-                    # # appropriately into a shape (batch, input_dim) for processing by the
-                    # # attribute predictors. Adjust pooling/aggregation as needed.
-                    # flattened_output = attn_output.permute(1, 0, 2).contiguous().view(batch_size, -1)
-                    
-                    # # pass through linear layer
-                    # attributes[attr] = self.attribute_predictors[attr](flattened_output)
             else:
                 attn_output = self.attention[attr](pe_x)
                 attributes = {attr: predictor(attn_output) for attr, predictor in self.attribute_predictors.items()}
-                # attn_output, _ = self.attention(pe_x, pe_x, pe_x)
-                # flattened_output = attn_output.permute(1, 0, 2).contiguous().view(batch_size, -1)
-                # attributes = {attr: predictor(flattened_output) for attr, predictor in self.attribute_predictors.items()}
         else:
-            # flattened_output = x.contiguous().view(batch_size, -1)
+            # x should have shape (seq_len, batch, input_dim)
             attributes = {}
 
             if not self.use_reduced_features_for_attrib:
@@ -837,107 +821,7 @@ class AttribAttention(nn.Module):
 
         return self.feed_forward(flattened_output)
 
-# class AttributesPredictor(nn.Module):
-#     def __init__(self, channels, num_heads, attribute_mappings, height, width):
-#         """
-#         channels: The number of channels in the input tensor.
-#         num_heads: Number of heads in the MultiheadAttention mechanism.
-#         attribute_dims: A dictionary where keys are attribute names and values are their dimensions.
-#         height, width: Dimensions of the spatial layout of the tensor before flattening.
-#         """
-#         super(AttributesPredictor, self).__init__()
-#         self.channels = channels
-#         self.height = height
-#         self.width = width
-#         self.flattened_dim = height * width * channels  # New flattened dimension
-        
-#         self.attention = nn.MultiheadAttention(channels, num_heads)
-        
-#         # Update attribute predictors with the new flattened_dim
-#         self.attribute_predictors = nn.ModuleDict({
-#             attr: nn.Linear(self.flattened_dim, len(vals)) for attr, vals in attribute_mappings.items()
-#         })
-
-#     def forward(
-#         self, 
-#         x # type: Tensor 
-#     ):
-#     # type: (...) -> Dict[str, Tensor]
-#         """
-#         x: The input tensor of shape (seq_len, batch, input_dim) for MultiheadAttention.
-#         """
-
-#         batch_size, c, h, w = x.size()
-#         assert c == self.channels and h == self.height and w == self.width, \
-#             f"Input tensor dimensions (channels, height, width) must be ({self.channels}, {self.height}, {self.width}), but got ({c}, {h}, {w})"
-
-#         seq_len = h * w
-#         input_dim = c
-
-#         # Reshape and permute `x` to shape (seq_len, batch, input_dim)
-#         x = x.permute(2, 3, 0, 1).reshape(seq_len, batch_size, input_dim)
-
-#         # add positional encodings to tensor before
-#         positional_encodings = positional_encoding_2d(h, w, c).to(x.device)
-#         positional_encodings = positional_encodings.view(h * w, 1, c).expand(-1, batch_size, -1)
-
-#         pe_x = x + positional_encodings
-
-#         # Assuming x is already in the right shape for MultiheadAttention.
-#         # You might need to adjust this depending on how your data is structured.
-#         attn_output, _ = self.attention(pe_x, pe_x, pe_x)  # attention weights for heads discarded
-        
-#         # Assuming the output of the attention mechanism is pooled or aggregated
-#         # appropriately into a shape (batch, input_dim) for processing by the
-#         # attribute predictors. Adjust pooling/aggregation as needed.
-#         flattened_output = attn_output.permute(1, 0, 2).contiguous().view(batch_size, -1)
-    
-#         attributes = {attr: predictor(flattened_output) for attr, predictor in self.attribute_predictors.items()}
-        
-#         return attributes
-
-# LSTM VERSION 
-# class AttributePredictor(nn.Module):
-#     def __init__(self, in_channels, hidden_size, num_attributes, seq_length):
-#         super().__init__()
-#         self.lstm = nn.LSTM(in_channels, hidden_size, batch_first=True)
-#         # self.attribute_pred = nn.Linear(hidden_size, num_attributes)
-#         self.seq_length = seq_length
-
-#     def forward(self, x):
-#         # takes as input a tensor x of shape [batch_size, in_channels, 1, 1]
-#         # If x has four dimensions, checks that the last two dimensions are both 1
-#         if x.dim() == 4:
-#             assert list(x.shape[2:]) == [1, 1]
-
-#         # flatten x from the second dimension onwards, resulting in a tensor of shape [batch_size, in_channels]
-#         x = x.flatten(start_dim=1)
-
-#         # Assuming x is of shape [batch, in_channels], we need to add a sequence dimension
-#         # LSTM expects input of shape (batch, seq_len, input_size), so reshape x accordingly
-#         x = x.unsqueeze(1).repeat(1, self.seq_length, 1)  # Repeat features for each time step
-        
-#         # Forward through LSTM
-#         lstm_out, (hn, cn) = self.lstm(x)  # lstm_out shape: [batch, seq_length, hidden_size]
-        
-#         # Predict attributes for each time step
-#         attributes = self.attribute_pred(lstm_out)  # attributes shape: [batch, seq_length, num_attributes]
-        
-#         return attributes
-    
-    # def __init__(self, in_channels, num_attributes):
-    #     super().__init__()
-    #     self.attribute_pred = nn.Linear(in_channels, num_attributes)
-
-    # def forward(self, x):
-    #     if x.dim() == 4:
-    #         assert list(x.shape[2:]) == [1, 1]
-    #     x = x.flatten(start_dim=1)
-    #     attributes = self.attribute_pred(x)
-
-    #     return attributes
-
-# simple test of with and without, seems like worse with? maybe needs more work to be used
+# tested a modified TwoMLPHead that uses convolutional layers before the TwoMLPHead layers, but did not get improved performance - perhaps needs more work
 class CNNandTwoMLPHead(nn.Module):
     """
     Extended head for FPN-based models incorporating CNN layers
@@ -976,21 +860,7 @@ class CNNandTwoMLPHead(nn.Module):
 
         return x
 
-# class WeightedFocalLoss(nn.Module):
-#     "Non weighted version of Focal Loss"
-#     def __init__(self, alpha=.25, gamma=2):
-#         super(WeightedFocalLoss, self).__init__()
-#         self.alpha = torch.tensor([alpha, 1-alpha]).cuda()
-#         self.gamma = gamma
-#
-#     def forward(self, inputs, targets):
-#         BCE_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
-#         targets = targets.type(torch.long)
-#         at = self.alpha.gather(0, targets.data.view(-1))
-#         pt = torch.exp(-BCE_loss)
-#         F_loss = at*(1-pt)**self.gamma * BCE_loss
-#         return F_loss.mean()
-
+# modified loss function that returns attribute_loss, calculated using focal loss algorithm
 def fastrcnn_loss_with_attributes(class_logits, attribute_logits_dict, box_regression, labels, attribute_dicts, attribute_weights_dict, regression_targets):
     # type: (Tensor, Dict[str, Tensor], Tensor, List[Tensor], List[Dict[str,Tensor]], Dict[str,Tensor], List[Tensor]) -> Tuple[Tensor, Tensor, Tensor]
     """
@@ -1007,65 +877,33 @@ def fastrcnn_loss_with_attributes(class_logits, attribute_logits_dict, box_regre
     Returns:
         classification_loss (Tensor)
         box_loss (Tensor)
+        total_attribute_loss (Tensor)
     """
-
-    # print("labels before cat:", labels)
-
 
     device = labels[0].device
 
     labels = torch.cat(labels, dim=0)
     
-    # print("labels after cat:", labels)
-    
     attribute_types = attribute_dicts[0].keys()
     for attrib_dict in attribute_dicts:
         assert attrib_dict.keys() == attribute_types, "All attribute dictionaries should have the same keys"
 
-    # print("[attrib_dict['material'] for attrib_dict in attribute_dicts]", [attrib_dict['material'].size() for attrib_dict in attribute_dicts])
-
     # merge the dictionaries by key, concatenating the values
-    # got an error that attrib_dict[key] had different lengths so it couldn't stack
     attributes = {key: torch.cat([attrib_dict[key] for attrib_dict in attribute_dicts], dim=0) for key in attribute_types}
-
-    # print("attributes['material'].size()", attributes['material'].size())
 
     # check if all attribute tensors have the same length
     attribute_lengths = [attribute.size(0) for attribute in attributes.values()]
     assert all(length == attribute_lengths[0] for length in attribute_lengths), "All attribute tensors should have the same length"
 
-    # for key in attributes.keys():
-    #     print('current key:', key)
-    #     print('attributes[key].size()', attributes[key].size())
-    #     print('attribute_logits_dict[key].size()', attribute_logits_dict[key].size())
-
     # get indices of attributes that are not background, then filter out the non-background attribute logits and labels
     # do this for each type of attribute
     for key, val in attributes.items():
         val_nonzero = torch.nonzero(val, as_tuple=True)[0]
-
-        # print('val.size()', val.size())
-        # print('val_nonzero.size()', val_nonzero.size())
-        # print('attribute_logits_dict[key].size()', attribute_logits_dict[key].size())
-
         attribute_logits_dict[key] = attribute_logits_dict[key][val_nonzero, :]
         attributes[key] = val[val_nonzero]
 
-        # print('current key', key)
-        # print(attribute_logits_dict[key])
-        # print(attributes[key])
-
-    # attributes_nonzero = torch.nonzero(attributes, as_tuple=True)[0] # returns a tuple of tensors, get the first one    
-    # attribute_logits = attribute_logits[attributes_nonzero, :]
-    # attributes = attributes[attributes_nonzero]
-
     regression_targets = torch.cat(regression_targets, dim=0)
-
     classification_loss = F.cross_entropy(class_logits, labels)
-
-    # custom weighted cross entropy
-    # attribute_loss = (F.cross_entropy(attribute_logits, attributes, weight=attribute_weights, reduction='sum') /
-    #                   len(attributes))
 
     # calculate attribute loss, summing up for each attribute
     # focal loss
@@ -1081,16 +919,10 @@ def fastrcnn_loss_with_attributes(class_logits, attribute_logits_dict, box_regre
 
         attrib_logits = attribute_logits_dict[key]
         attrib = attributes[key]
-        # if 0 in attrib:
-        #     print("0 detected in attrib:", attrib)
 
         # Skip if attrib_logits and attrib are empty
         if attrib_logits.numel() == 0 and attrib.numel() == 0:
             continue
-
-        # check if attrib_logits is predicted 0
-        # if 0 in torch.argmax(attrib_logits, dim=1):
-        #     print('0 detected in training')
 
         ce_loss = F.cross_entropy(attrib_logits, attrib, reduction='none')
         if math.isnan(ce_loss):
@@ -1098,33 +930,23 @@ def fastrcnn_loss_with_attributes(class_logits, attribute_logits_dict, box_regre
 
         pt = torch.exp(-ce_loss)
 
+        # if alpha is provided, calculate weighted focal loss
+        # else alpha is same for all classes
         if (type(alpha) == torch.Tensor and len(alpha)>1):
             # Index alpha with the class labels to get a tensor of size N
             alpha_selected = alpha[attrib]
 
-            
-            # Ensure focal_factor is broadcastable with ce_loss
-            # ce_loss is of size N, so we squeeze focal_factor to match this shape
-            focal_factor = (1 - pt) ** gamma
-            # focal_factor = focal_factor.squeeze()
-
             # Compute the focal loss
+            focal_factor = (1 - pt) ** gamma            
             focal_loss = alpha_selected * focal_factor * ce_loss
-
-            # print("alpha_selected", alpha_selected)
-            # print("(1 - pt)", (1 - pt))
-            # print("focal_factor", focal_factor)
-            # print("ce_loss", ce_loss)
-            # exit()
 
         else:
             focal_loss = alpha * (1 - pt) ** gamma * ce_loss
-            # print('focal loss:', focal_loss)
 
         # Average the loss over the batch
         attribute_loss = focal_loss.mean()
-        # print('attribute_loss', attribute_loss)
 
+        # if attribute_loss is nan, might have errors with focal loss - didn't need this while testing but theoretically could be a problem?
         if torch.isnan(attribute_loss):
             print("alpha", alpha)
             print("(1 - pt)", (1 - pt))
@@ -1133,32 +955,8 @@ def fastrcnn_loss_with_attributes(class_logits, attribute_logits_dict, box_regre
 
         total_attribute_loss += attribute_loss
 
-    # attribute_loss = (alpha * (1 - pt) ** gamma * ce_loss).mean()  # mean over the batch
-
-
-    # print('labels:', labels)
-    # print('attribute loss:', attribute_loss)
-
-    # probs = F.softmax(attribute_logits, dim=1)
-    #
-    # gamma = 2.0  # Focusing parameter
-    # alpha = attribute_weights # Example constant value e.g. 0.25, or use a tensor for class-dependent values
-    #
-    # # Compute the focal loss
-    # # Gather the probabilities of the target classes
-    # target_probs = probs.gather(1, attributes.unsqueeze(1))
-    # # Calculate the focal loss factor
-    # focal_factor = (1 - target_probs) ** gamma
-    # # Calculate the cross-entropy loss without reduction
-    # cross_entropy_loss = F.cross_entropy(attribute_logits, attributes, reduction='none')
-    # # Apply the focal factor and alpha to the cross-entropy loss
-    # focal_loss = alpha * focal_factor * cross_entropy_loss
-    # # Sum or average the losses
-    # attribute_loss = focal_loss.mean()
-
-    # get indices that correspond to the regression targets for
-    # the corresponding ground truth labels, to be used with
-    # advanced indexing
+    # get indices that correspond to the regression targets for the corresponding 
+    # ground truth labels, to be used with advanced indexing
     sampled_pos_inds_subset = torch.where(labels > 0)[0]
     labels_pos = labels[sampled_pos_inds_subset]
     N, num_classes = class_logits.shape
@@ -1172,14 +970,12 @@ def fastrcnn_loss_with_attributes(class_logits, attribute_logits_dict, box_regre
     )
     box_loss = box_loss / labels.numel()
 
-    # print('returning total_attribute_loss=', total_attribute_loss)
-
-    # empty = torch.tensor(0, dtype=torch.float32, device=device)
-
     return classification_loss, box_loss, total_attribute_loss
-    #return classification_loss, box_loss, empty
 
-# yet to be fixed
+# evaluate the modified model
+# modified from the original evaluate function in engine.py
+# considered trying to calculate validation loss to determine when to stop training
+# but need to modify rpn and roi_head to return both losses and detections to do this
 @torch.inference_mode()
 def evaluate(model, data_loader, device, eval_attrib=True, calc_overall_metrics=False, print_cm=False, score_threshold=0.7, iou_threshold=0.5):
     n_threads = torch.get_num_threads()
@@ -1205,14 +1001,6 @@ def evaluate(model, data_loader, device, eval_attrib=True, calc_overall_metrics=
                                                score_threshold=score_threshold,
                                                calc_overall_metrics=calc_overall_metrics)
             attrib_evaluator_list.append(attrib_evaluator)
-    #         modded_coco = modify_coco_attrib(coco, attrib_name)
-    #         attrib_evaluator_list.append(CocoEvaluator(modded_coco, iou_types))
-    # coco_evaluator = AttribEvaluator(coco, iou_types)
-
-    # for calculating validation loss - can't do this - need to modify rpn and roi_head to do both loss and detection
-    # alot of modification + would slow down training too
-    # total_loss = 0.0
-    # num_samples = 0
 
     for images, targets in metric_logger.log_every(data_loader, 100, header):
         images = list(img.to(device) for img in images)
@@ -1224,6 +1012,7 @@ def evaluate(model, data_loader, device, eval_attrib=True, calc_overall_metrics=
         with torch.no_grad():
             losses, outputs = model(images, targets, eager_output=False)
 
+        # send to cpu for ease of processing
         def sendToCpu(output_dict):
             for key, value in output_dict.items():
                 if key != "attributes":
@@ -1235,14 +1024,7 @@ def evaluate(model, data_loader, device, eval_attrib=True, calc_overall_metrics=
             return output_dict
 
         outputs = [sendToCpu(t) for t in outputs]
-
-        #outputs = [{k: v.to(cpu_device) for k, v in t.items()} for t in outputs]
         model_time = time.time() - model_time
-
-        # for evaluating loss
-        # loss = sum(loss for loss in losses.values())
-        # total_loss += loss
-        # num_samples += len(images)
 
         # evaluate accuracy of detections
         res = {target["image_id"]: output for target, output in zip(targets, outputs)}
@@ -1252,26 +1034,14 @@ def evaluate(model, data_loader, device, eval_attrib=True, calc_overall_metrics=
         if eval_attrib:
             for attrib_evaluator, attrib_name in zip(attrib_evaluator_list, orig_dataset.attrib_mappings.keys()):
                 attrib_evaluator.update(outputs, targets)
-            #     modded_res = modify_results(res, attrib_name)
-            #     # print('modded_res', modded_res)
-            #     attrib_evaluator.update(modded_res)
-            #     # print('cocoDt', attrib_evaluator.coco_eval['bbox'].cocoDt.dataset)
             
-        #attrib_evaluator.update(res)
         evaluator_time = time.time() - evaluator_time
         metric_logger.update(model_time=model_time, evaluator_time=evaluator_time)
-
-    # val_loss = total_loss/num_samples
-    # print(f"Averaged validation loss: {val_loss}")
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
     coco_evaluator.synchronize_between_processes()
-
-    # if eval_attrib:
-    #     for attrib_evaluator in attrib_evaluator_list:
-    #         attrib_evaluator.synchronize_between_processes()
 
     # accumulate predictions from all images
     coco_evaluator.accumulate()
@@ -1285,24 +1055,6 @@ def evaluate(model, data_loader, device, eval_attrib=True, calc_overall_metrics=
     if eval_attrib:
         for i, attrib_evaluator in enumerate(attrib_evaluator_list):
             f1s[i] = attrib_evaluator.evaluate(print_cm=print_cm)
-            # if f1 is not None:
-            #     f1s.append(f1)
-            
-    
-    # if eval_attrib:
-    #     for attrib_evaluator, attrib_name in zip(attrib_evaluator_list, orig_dataset.attrib_mappings.keys()):
-    #         print("Evaluating attribute:", attrib_name)
-    #         attrib_evaluator.accumulate()
-    #         attrib_evaluator.summarize()
-
-            # print("attrib_evaluator.coco_eval['bbox'].eval", attrib_evaluator.coco_eval['bbox'].eval)
-
-            # matches = attrib_evaluator.coco_eval['bbox'].eval['matches']
-            # categories = attrib_evaluator.coco_gt.loadCats(attrib_evaluator.coco_gt.getCatIds())
-            
-            # print('matches', matches)
-            # print('categories', categories)
-            # exit()
 
     torch.set_num_threads(n_threads)
 
