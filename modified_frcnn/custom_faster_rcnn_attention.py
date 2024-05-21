@@ -563,7 +563,7 @@ class CustomRoIHead(RoIHeads):
 
             # there is one box per class per proposal, but only one attribute prediction per proposal
             # so to ensure each box has a corresponding attribute, have to repeat by number of classes
-            # refer to documentation for extended explanation
+            # refer to readme.txt for extended explanation
             for key in attribute_label_dict:
                 attribute_label_dict[key] = attribute_label_dict[key].unsqueeze(1).repeat(1, num_classes)
                 attribute_score_dict[key] = attribute_score_dict[key].unsqueeze(1).repeat(1, num_classes)
@@ -906,9 +906,7 @@ def fastrcnn_loss_with_attributes(class_logits, attribute_logits_dict, box_regre
     regression_targets = torch.cat(regression_targets, dim=0)
     classification_loss = F.cross_entropy(class_logits, labels)
 
-    # calculate attribute loss, summing up for each attribute
-    # focal loss
-    # alpha = attribute_weights
+    # calculate attribute loss, summing up for each attribute (uses focal loss algo)
     alpha = 0.25
     gamma = 2
     total_attribute_loss = torch.tensor(0., dtype=torch.float32).to(device)
