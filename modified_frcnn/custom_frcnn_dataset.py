@@ -1,7 +1,9 @@
+### CUSTOM DATASET FOR modified faster rcnn
+# importantly implements attributes for each bounding box
+
 import torch
 from PIL import Image
 from torchvision import tv_tensors
-# import fiftyone.utils.coco as fouc
 from torchvision.io import read_image, ImageReadMode
 import json
 from torchvision.transforms.v2 import functional as F
@@ -20,6 +22,7 @@ class CustomFRCNNAttentionDataset(torch.utils.data.Dataset):
 
         # Filter images with bounding boxes
         # if at least one annotation has a bounding box and matches the id, then it will be included
+        # if ignore_occluded is True, then only annotations with occluded=False will be included
         if ignore_occluded:
             self.images = [img for img in self.coco_annotations['images'] 
                         if img['id'] not in exclude and 
@@ -33,18 +36,19 @@ class CustomFRCNNAttentionDataset(torch.utils.data.Dataset):
 
         self.ignore_occluded = ignore_occluded
 
+        # load class names from annotations file if not provided
         if classes:
             self.classes = classes
         else:
             self.classes = [category['name'] for category in self.coco_annotations['categories']]
             
+        # if no background class, add it
         if self.classes[0] != "background":
             self.classes = ["background"] + self.classes
 
+        # attrib_mappings stores the mapping of attribute names to their integer values, and reverse_ is the inverse mapping
         self.attrib_mappings = attrib_mappings
         self.reverse_attrib_mappings = {}
-
-
         for attrib_name, mapping_dict in attrib_mappings.items():
             self.reverse_attrib_mappings[attrib_name] = {v:k for k,v in mapping_dict.items()}
         
@@ -54,7 +58,7 @@ class CustomFRCNNAttentionDataset(torch.utils.data.Dataset):
         img_path = os.path.join(self.img_dir, self.images[idx]['file_name'])
         
         # load images and masks       
-        img = read_image(img_path, mode=ImageReadMode.RGB)#_ALPHA if img_path[-4:] == ".png" else ImageReadMode.RGB)
+        img = read_image(img_path, mode=ImageReadMode.RGB) # ignore alpha channel if present, only read RGB
 
          # Get annotations for this image
         annotations = [ann for ann in self.coco_annotations['annotations'] if ann['image_id'] == img_id]
@@ -68,11 +72,11 @@ class CustomFRCNNAttentionDataset(torch.utils.data.Dataset):
         area = [ann['area'] for ann in annotations]
 
         attributes = {}
-        #make this into a list later
 
         try:
             for key, mapping_dict in self.attrib_mappings.items():
                 attributes[key] = torch.as_tensor([mapping_dict[ann['attributes'][key]] for ann in annotations], dtype=torch.int64)
+        # catch exception if key not found
         except KeyError as e:
             print(f"KeyError: {e}")
             for ann in annotations:
@@ -80,11 +84,9 @@ class CustomFRCNNAttentionDataset(torch.utils.data.Dataset):
             print(img_id)
             raise KeyError
 
-        # area = (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0])
-
         num_objs = len(labels)
         
-        # suppose all instances are not crowd
+        # suppose all instances are not crowd - required variable for COCO evaluation
         iscrowd = torch.zeros((num_objs,), dtype=torch.int64)
 
         # Wrap sample and targets into torchvision tv_tensors:
@@ -106,6 +108,7 @@ class CustomFRCNNAttentionDataset(torch.utils.data.Dataset):
 
         return img, target
 
+    # same as __getitem__ but without the image to save memory and speed up processing
     def get_target(self, idx):
         img_id = self.images[idx]['id']
         img_path = os.path.join(self.img_dir, self.images[idx]['file_name'])
@@ -120,7 +123,6 @@ class CustomFRCNNAttentionDataset(torch.utils.data.Dataset):
         area = [ann['area'] for ann in annotations]
 
         attributes = {}
-        #make this into a list later
 
         try:
             for key, mapping_dict in self.attrib_mappings.items():
@@ -131,8 +133,6 @@ class CustomFRCNNAttentionDataset(torch.utils.data.Dataset):
                 print(ann['attributes'].keys())
             print(img_id)
             raise KeyError
-
-        # area = (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0])
 
         num_objs = len(labels)
         

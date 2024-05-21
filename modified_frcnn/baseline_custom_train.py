@@ -1,55 +1,60 @@
-from inception.inception_resnet_v2 import Inception_ResNetv2_multitask
-from torchvision.models.detection import fasterrcnn_resnet50_fpn
-from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-import torch.nn.functional as F
-from torchvision.transforms import v2 as T
-from engine import train_one_epoch, evaluate
+## SCRIPT TO TRAIN BASELINE MODEL
+# separate training and testing of detector and classifier
+
+import math
+import time
 import sys
 import utils
 import torch
 import json
-from custom_frcnn_dataset import CustomFRCNNAttentionDataset
-from torch.utils.data import DataLoader, Dataset, random_split
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+from collections import defaultdict
+from torch.utils.data import DataLoader, random_split
 from torch.utils.tensorboard import SummaryWriter
 from torchvision.ops import roi_align
-import math
-import time
-from collections import defaultdict
-import os
-from attrib_eval import AttribEvaluator, print_confusion_matrix
 from torchvision.models.detection.backbone_utils import _resnet_fpn_extractor
 from torchvision.models.resnet import resnet101, ResNet101_Weights
 from torchvision.ops import misc as misc_nn_ops
-import numpy as np
-import matplotlib.pyplot as plt
+from torchvision.models.detection import fasterrcnn_resnet50_fpn
+from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
+import torch.nn.functional as F
+from torchvision.transforms import v2 as T
+from torchvision.transforms import functional as F
+
+# from local files
+from engine import train_one_epoch, evaluate
+from inception.inception_resnet_v2 import Inception_ResNetv2_multitask
+from custom_frcnn_dataset import CustomFRCNNAttentionDataset
+from attrib_eval import print_confusion_matrix
 
 def main():
 
     JOB_ID = sys.argv[1]
 
     annotations_filepath = 'data/mapped_combined_annotations.json'
-    #annotations_filepath = 'data/gmaps_1_annotations.json'
+
     root = 'data/combined'
-    logging = True
-    # num_epochs = 12
 
     # lr schedule
     num_iterations = 30000 # number of images to process before stopping training
     milestones = [16000,25000]
 
-    use_attribute_weights = True
-    save_checkpoints = True
-    use_predefined_trainval = True
-    train_detector = True
-    train_classifier = False
-    pretrained_detector = False
+    # flags for training
+    use_attribute_weights = True # calculate attribute weights for focal loss
+    save_checkpoints = True # save model checkpoints
+    use_predefined_trainval = True # load train and val ids from file (vs random_split)
+    train_detector = True # whether to train the detector
+    train_classifier = False # whether to train the classifier
+    resnet101_detector = False # whether to use a pretrained detector
+    trainable_backbone_layers = 5
     
-    print(f"train_detector: {train_detector}")
-    print(f"pretrained detector: {pretrained_detector}")
-
+    print(f"train_detector: {train_detector}") # uses pretrained weights, unless resnet101 is used
+    print(f"resnet101 detector: {resnet101_detector}")
     print(f"train_classifier: {train_classifier}")
-
     print(f"use_attribute_weights={use_attribute_weights}")
+    print(f"trainable_backbone_layers={trainable_backbone_layers}")
 
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
@@ -60,12 +65,7 @@ def main():
     with open("attrib_mappings.json", "r") as f:
         attrib_mappings = json.load(f)
 
-    # target_attrib = 'category'
-    # num_classes = len(attrib_mappings[target_attrib])
-
-    # exclude = list(range(700,2000))
-    exclude = None
-
+    exclude = None # list of ids to exclude from training (to speed up training)
     if exclude:
         assert not use_predefined_trainval, "cannot exclude ids if using predefined train and val set"
         print(f"excluding ids from {exclude[0]} to {exclude[-1]}")
@@ -85,6 +85,7 @@ def main():
         
     dataset_size = len(dataset)
 
+    # load train and val ids from file if using predefined train and val set - highly recommended
     if use_predefined_trainval:
         train_id_file = 'data/train_ids.txt'
         val_id_file = 'data/val_ids.txt'
@@ -95,7 +96,7 @@ def main():
         with open(val_id_file, 'r') as f:
             val_ids = [int(i) for i in f.read().split(',')]
         
-        val_dataset = torch.utils.data.Subset(dataset, val_ids)
+        val_dataset = torch.utils.data.Subset(raw_dataset, val_ids)
         train_dataset = torch.utils.data.Subset(dataset, train_ids)
     
     else:
@@ -104,28 +105,28 @@ def main():
 
         train_dataset, val_dataset = random_split(dataset, [train_size, val_size], generator=generator)
 
+    # calculate number of epochs to reduce lr/end training
     num_epochs = math.ceil(num_iterations/len(train_dataset))
     milestones = [math.ceil(x/len(train_dataset)) for x in milestones]
-    # train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
+    # load data into dataloaders
     train_dataloader = DataLoader(train_dataset, batch_size=4, shuffle=False, collate_fn=utils.collate_fn)
     validation_dataloader = DataLoader(val_dataset, batch_size=1, shuffle=False, collate_fn=utils.collate_fn)
 
+    # same as in train_custom_fasterrcnn_attention, refer there
     if use_attribute_weights:   
-        attribute_weight_threshold = 3 # maybe set this as a parameter?
+        attribute_weight_threshold = 3
 
         # calculate attribute weights
         attribute_counts = {}
         for attrib_name, attrib_mapping in dataset.reverse_attrib_mappings.items():
-            attribute_counts[attrib_name] = torch.zeros(len(attrib_mapping.keys()), device=device) # {k:0 for k in attrib_mapping.keys()}
-        
-        #for _, target in train_dataset:
+            attribute_counts[attrib_name] = torch.zeros(len(attrib_mapping.keys()), device=device)
+
         for index in train_dataset.indices:
             target = dataset.get_target(index)
             attribs = target['attributes']
             for attrib_name, attrib_vals in attribs.items():
                 for val in attrib_vals:
-                    
                     # don't count 'unknown' attribute
                     if int(val) == 0:
                         continue
@@ -140,12 +141,8 @@ def main():
             # calculate log scale inverse frequency
             weights = torch.log(counts.sum() / counts + 1)
 
-            # weights = counts.sum() / counts
             weights[weights>attribute_weight_threshold] = attribute_weight_threshold
             weights = torch.nn.functional.normalize(weights, dim=0)
-            
-            # print("doubling weights")
-            # weights *= 2
 
             attribute_weights_dict[attrib_name] = weights
         
@@ -153,34 +150,29 @@ def main():
     else:
         attribute_weights_dict = None
 
-    if logging:
-        writer = SummaryWriter(f'runs/{JOB_ID}')
-
     num_classes_dict = {k:len(v) for k,v in attribute_weights_dict.items()}        
 
+    # TRAIN DETECTOR
     if train_detector:
         if save_checkpoints:
             detector_checkpoints_folder = os.path.join("checkpoints", f"{sys.argv[1]}", "detector")
             os.makedirs(detector_checkpoints_folder)
 
-        if pretrained_detector:
-            print("USING RESNET-50, no pretrained faster r-cnn on resnet101")
-            detector = fasterrcnn_resnet50_fpn(weights="DEFAULT")
-            # backbone = resnet101(weights=ResNet101_Weights.IMAGENET1K_V1, progress=progress,
-            #                      norm_layer=misc_nn_ops.FrozenBatchNorm2d)
-        else:
+        if resnet101_detector:
+            # replace backbone with resnet101
             detector = fasterrcnn_resnet50_fpn()
             backbone = resnet101(weights=ResNet101_Weights.IMAGENET1K_V1, progress=True,
                                  norm_layer=misc_nn_ops.FrozenBatchNorm2d)
-            trainable_backbone_layers=5
             backbone = _resnet_fpn_extractor(backbone, trainable_backbone_layers)
             detector.backbone = backbone
+        else:
+            detector = fasterrcnn_resnet50_fpn(weights="DEFAULT", trainable_backbone_layers=trainable_backbone_layers)
 
         detector.roi_heads.box_predictor = FastRCNNPredictor(in_channels=1024,num_classes=2)
 
         detector.to(device)
 
-        if not pretrained_detector:
+        if resnet101_detector:
             # construct an optimizer
             params = [p for p in detector.parameters() if p.requires_grad]
             optimizer = torch.optim.SGD(
@@ -198,14 +190,15 @@ def main():
             print(f"training detector for {num_epochs} epochs...")
             print(f"learning rate stepped down at epochs {milestones}")
         else:
+            # because using pretrained detector, don't need as much training
             params = [p for p in detector.parameters() if p.requires_grad]
             optimizer = torch.optim.SGD(
                 params,
-                lr=0.001, # for resnet101
+                lr=0.001, # for resnet50
                 momentum=0.9,
                 weight_decay=0.0005
             )
-            lr_scheduler = torch.optim.lr_scheduler.StepLR(
+            lr_scheduler = torch.optim.lr_scheduler.StepLR( # steps down every 5 epochs
                optimizer,
                step_size=5,
                gamma=0.1
@@ -213,7 +206,7 @@ def main():
             num_epochs = 14
             print(f"training detector for {num_epochs} epochs...")
         
-
+        # store mAPs for each epoch for plotting
         mAPs = np.zeros(num_epochs)
 
         for epoch in range(num_epochs):
@@ -233,9 +226,9 @@ def main():
                             'loss': train_metrics.loss.global_avg
                             }, checkpoint_file)
         
+        # plot mAPs to an image
         metrics_folder = 'metrics'
         metrics_file = os.path.join(metrics_folder, f"{sys.argv[1]}.png")
-
         x = np.arange(len(mAPs))
         plt.plot(x, mAPs, label='mAPs', marker='o')
         plt.title('Performance Metrics Over Time')
@@ -247,6 +240,7 @@ def main():
         plt.savefig(metrics_file, dpi=300)  # Saves the plot as a PNG file
         plt.close()
 
+    # TRAIN CLASSIFIER
     if train_classifier:
         if save_checkpoints:
             classifier_checkpoints_folder = os.path.join("checkpoints", f"{sys.argv[1]}", "classifier")
@@ -266,12 +260,6 @@ def main():
             momentum=0.9,
             weight_decay=0.0005
         )
-
-        #lr_scheduler = torch.optim.lr_scheduler.StepLR(
-        #    optimizer,
-        #    step_size=3,
-        #    gamma=0.1
-        #)
 	
         lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(
              optimizer,
@@ -279,6 +267,7 @@ def main():
              gamma=0.1  # Factor to reduce the learning rate by at each milestone
         )
 
+        # store metrics for plotting
         num_attribs = len(attrib_mappings)
         f1s = np.zeros((num_epochs, num_attribs))
         x = np.arange(num_epochs)
@@ -301,6 +290,7 @@ def main():
                             'loss': train_metrics.loss.global_avg
                             }, checkpoint_file)
 
+        # plot evaluation metrics for each epoch
         metrics_folder = 'metrics'
         metrics_file = os.path.join(metrics_folder, f"{sys.argv[1]}.png")
         for i, attrib_name in enumerate(attrib_mappings.keys()):
@@ -334,8 +324,6 @@ def classifier_train_one_epoch(model, optimizer, data_loader, device, epoch, pri
 
         images = list(image.to(device) for image in images)
         
-
-        # targets = [t['attributes'][target_attrib] for t in targets]
         target_attrib_dict = defaultdict(list)
         images_cropped = []
         ids = []
@@ -343,8 +331,10 @@ def classifier_train_one_epoch(model, optimizer, data_loader, device, epoch, pri
             ids.append(t['image_id'])
             indices = []
 
+            # for the given image/target, get the attribute data for the one labeled box
+            # check if all attributes are known
+            # if any are unknown, skip this image, don't use it for training
             skip = False
-
             for target_attrib in attribute_weights_dict.keys():
                 attrib = t['attributes'][target_attrib]
 
@@ -352,8 +342,6 @@ def classifier_train_one_epoch(model, optimizer, data_loader, device, epoch, pri
 
                 # there should only be one non-zero value in attrib
                 index = torch.argmax(attrib)
-
-                # assert attrib[index]!=0, f"attrib is 0 for image_{t['image_id']}, attrib looks like {attrib}"
 
                 if attrib[index] == 0:
                     # annotation for this attribute is unknown, cannot be used for training
@@ -368,9 +356,6 @@ def classifier_train_one_epoch(model, optimizer, data_loader, device, epoch, pri
                 for target_attrib in attribute_weights_dict.keys():
                     if skip == target_attrib: break
                     target_attrib_dict[target_attrib].pop()
-
-                # print(target_attrib_dict)
-                # print(images_cropped)
 
                 # skip this image
                 continue
@@ -389,55 +374,35 @@ def classifier_train_one_epoch(model, optimizer, data_loader, device, epoch, pri
         for k,v in target_attrib_dict.items():
             target_attrib_dict[k] = torch.stack(v)
 
-        # print('images len:', len(images_cropped))
-        # print('attr len:', len(target_attrib_dict['category']))
-        
-        # targets = torch.stack(target_attrib_dict)
         images = torch.stack(images_cropped)
-        # print('images shape:', images.shape)
-        # print(images.device)
-        # print(targets.device)
-        # print(target_attrib_dict[0].device)
 
         with torch.cuda.amp.autocast(enabled=scaler is not None):
-            # for image in images_cropped:
-            #     pred = model(image)
+            # send images through model
             classes_raw_dict = model(images)
             
             # apply softmax to classes
             classes_logits_dict = {k:F.softmax(v, dim=1) for k,v in classes_raw_dict.items()}
-
-            # print('classes', classes)
-            # print('targets', targets)
-            # print('ids', ids)
-
-            # calculate loss
-            # loss = F.cross_entropy(classes, targets)
-            # losses = sum(loss)
 
             alpha = 0.25
             gamma = 2
             total_loss = torch.tensor(0., dtype=torch.float32).to(device)
 
             for key in attribute_weights_dict:
-                # if attribute_weights_dict is defined, override the default alpha
-                # if attribute_weights_dict:
+                # override the default alpha with the attribute_weights
                 alpha = attribute_weights_dict[key]
 
-                # attrib_logits = attribute_logits_dict[key]
-                # attrib = attributes[key]
-
+                # how about i just remove the unknowns at this step instead of skipping image like earlier?
                 target_attrib = target_attrib_dict[key]
                 logits_attrib = classes_logits_dict[key]
-                
 
                 # Skip if attrib_logits and attrib are empty
                 if target_attrib.numel() == 0 and logits_attrib.numel() == 0:
                     continue
 
-                ce_loss = F.cross_entropy(logits_attrib, target_attrib, reduction='none')
+                ## calculate focal loss between logits and target
 
-                if math.isnan(ce_loss):
+                ce_loss = F.cross_entropy(logits_attrib, target_attrib, reduction='none')
+                if math.isnan(ce_loss): # skip this attribute if loss is nan
                     continue
 
                 pt = torch.exp(-ce_loss)
@@ -453,12 +418,6 @@ def classifier_train_one_epoch(model, optimizer, data_loader, device, epoch, pri
 
                     # Compute the focal loss
                     focal_loss = alpha_selected * focal_factor * ce_loss
-
-                    # print("alpha_selected", alpha_selected)
-                    # print("(1 - pt)", (1 - pt))
-                    # print("focal_factor", focal_factor)
-                    # print("ce_loss", ce_loss)
-                    # exit()
 
                 else:
                     focal_loss = alpha * (1 - pt) ** gamma * ce_loss

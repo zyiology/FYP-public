@@ -2,14 +2,15 @@ import torch
 import math
 from typing import Any
 
+# class to evaluate attribute classification for a given attribute
+
 class AttribEvaluator:
     def __init__(self, target_attribute, attrib_mapping, calc_overall_metrics=False, iou_threshold=0.5, score_threshold=0.7):
         self.target_attribute = target_attribute
         self.iou_threshold = iou_threshold
         self.score_threshold = score_threshold
 
-        # self.tp_fp_record = [] #torch.tensor([], dtype=torch.bool)
-        self.attrib_scores = [] #torch.tensor([], dtype=torch.float32)
+        self.attrib_scores = []
         self.gt_labels = []
         self.pred_labels = []
         
@@ -26,6 +27,7 @@ class AttribEvaluator:
             self.overall_pred_labels = []
             self.gt_label_count = 0
 
+    # add a set of results, typically from one batch, to the evaluator
     def update(self, results, targets):
         # example of results[0]
         # {
@@ -53,13 +55,13 @@ class AttribEvaluator:
         #     }
         # }
 
+        # calculate attribute prediction performance
+        # i.e. how good is attribute prediction when the object is detected
         # for each box in targets
         #   calculate the iou with all boxes in results
         #   find the box with the highest iou
         #   if iou > iou_threshold and label matches, then it is a true positive
         #   if iou < iou_threshold or label does not match, then it is a false positive
-
-        # focus of this evaluation is accurate classification of the attribute when object detection is accurate
 
         # n = sum([t['labels'].shape[0] for t in targets])
         gt_labels = torch.cat([t['attributes'][self.target_attribute] for t in targets])
@@ -70,8 +72,6 @@ class AttribEvaluator:
         n = gt_labels.shape[0]
         attrib_scores = torch.zeros(n, dtype=torch.float32)
         pred_labels = torch.zeros(n, dtype=torch.int32)
-        # tp_fp_record = torch.zeros(n, dtype=torch.bool)
-        # gt_labels = torch.zeros(n, dtype=torch.int64)
         
         i = 0
         assert len(results)==len(targets), "LENGTH OF RESULTS != LENGTH OF TARGETS"
@@ -115,19 +115,22 @@ class AttribEvaluator:
             print(i)
             raise ValueError("number of gt labels processed is wrong")
 
-        # self.tp_fp_record.append(tp_fp_record)
+        # save results of attribute prediction performance evaluation
         self.attrib_scores.append(attrib_scores)
         self.gt_labels.append(gt_labels)
         self.pred_labels.append(pred_labels)
 
         # calculate overall metrics
+        # filter out pred boxes below a score threshold
+        # match each pred box with a gt box, using IoU threshold
+        # pred with no match -> false positive
+        # gt with no match -> false negative
         if self.calc_overall_metrics:
             self.num_images += len(results)
 
             overall_gt_labels = []
             overall_pred_labels = []
 
-            # should i also track gts which failed to be detected??
             for result, target in zip(results, targets):
                 pred_boxes = result['boxes']
                 pred_scores = result['scores']
@@ -136,57 +139,43 @@ class AttribEvaluator:
                 mask = pred_scores > self.score_threshold
                 pred_boxes = pred_boxes[mask]
                 pred_scores = pred_scores[mask]
-                # pred_boxes = pred_boxes[:10]
-                # pred_scores = pred_scores[:10]
 
                 # sort scores and boxes by scores
                 s = torch.argsort(pred_scores)
                 pred_boxes = pred_boxes[s]
 
-                # logic adapted from cocoeval.py in pycocotools
-                # match each pred box with a gt box
-                # unmatched_gts = list(range(len(target['boxes'])))
-                # unmatched_preds = list(range(len(pred_boxes)))
-                self.gt_label_count += len(target['boxes'])
+                self.gt_label_count += len(target['boxes']) # count true positives
 
+                # mapping logic
                 pred_gt_box_mapping = {}
-                
-                for i, pred_box in enumerate(pred_boxes):
+                for i, pred_box in enumerate(pred_boxes): # iterate through predicted boxes
                     max_match_iou = -1
-                    for j, gt_box in enumerate(target['boxes']):
+                    for j, gt_box in enumerate(target['boxes']): # for given pred box, iterate through gts to find best match
                         if j in pred_gt_box_mapping.values():
                             continue
                         iou = compute_iou(gt_box, pred_box)
-                        if iou>self.iou_threshold and iou>max_match_iou:
-                            # matched_gt_index = j
+                        # if iou threshold is met and iou is highest so far, assign pred box (i) to gt box (j)
+                        if iou>self.iou_threshold and iou>max_match_iou: 
                             max_match_iou = iou
                             pred_gt_box_mapping[i] = j
 
+                    # if pred box failed to be matched to any gts, it's a false positive
                     if i not in pred_gt_box_mapping.keys():
                         self.false_pos += 1
+                    # else take its attribute data for comparison to matched gt
                     else:
                         matched_gt_index = pred_gt_box_mapping[i]
                         gt_label = target['attributes'][self.target_attribute][matched_gt_index]
 
-                        # don't use the matched gt for evaluation if it's an unknown attribute
-                        # *we kept it around for matching so that pred boxes can still be mapped to valid buildings
+                        # don't use the matched gt for attribute prediction evaluation if it's an unknown attribute
+                        # we kept it around for matching so that pred boxes can still be mapped to buildings without attribute data
+                        # to ensure our false positives/false negatives detections are more accurate
                         if gt_label != 0:
                             overall_gt_labels.append(gt_label)
                             overall_pred_labels.append(result['attributes'][self.target_attribute]['labels'][i])
 
-
                 # check how many gts didn't get matched
                 self.false_neg += (len(target['boxes']) - len(pred_gt_box_mapping))
-
-                # highest_ious = torch.zeros(len(unmatched_gts))
-                # for gt_index in unmatched_gts:
-                #     for pred_index in unmatched_preds:
-                #         iou = compute_iou(target['boxes'][gt_index], pred_boxes[pred_index])
-                #         highest_ious[gt_index] = max(highest_ious[gt_index], iou)
-                # print(f"image_id: {target['image_id']} failed to match {len(unmatched_gts)} annotations, with max ious {highest_ious}")
-                
-                    
-
 
             if overall_gt_labels:
                 self.overall_gt_labels.append(torch.stack(overall_gt_labels))
@@ -260,7 +249,6 @@ def calculate_metrics(predicted, targets, n, print_cm):
     weights = counts / counts.sum()
 
     # calculate weighted averages
-
     wavg_precision = (weights * precision).sum().item()
     wavg_recall = (weights * recall).sum().item()
     wavg_f1 = (weights * f1).sum().item()

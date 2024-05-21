@@ -1,3 +1,4 @@
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -12,17 +13,15 @@ from attrib_eval import compute_iou
 import json
 from custom_frcnn_dataset import CustomFRCNNAttentionDataset
 import utils
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 import time
 from attrib_eval import print_confusion_matrix
 from engine import evaluate
 from baseline_custom_train import classifier_evaluate
 from torchvision.models.detection.backbone_utils import _resnet_fpn_extractor
-from torchvision.models.resnet import resnet101, ResNet101_Weights
+from torchvision.models.resnet import resnet101
 from torchvision.ops import misc as misc_nn_ops
 
-
-# how to train overall model
 # train faster rcnn by itself
 # then train inception resnet v2 by itself
 # then test them together

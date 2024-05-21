@@ -277,6 +277,7 @@ def custom_fasterrcnn_resnet_fpn(
                              **kwargs)
     
     if pretrained:
+        # should modify this to account for resnet101, there's no state dict for resnet101 version
         state_dict = load_state_dict_from_url(model_urls["fasterrcnn_resnet50_fpn_coco"], progress=progress)
         model.load_state_dict(state_dict)
         overwrite_eps(model, 0.0)
