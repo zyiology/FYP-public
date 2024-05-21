@@ -1,14 +1,15 @@
+## SCRIPT FOR EVALUATION OF ATTRIBUTE/OVERALL PREDICTION PERFORMANCE
+# class to evaluate attribute classification for a given attribute
+
 import torch
 import math
 from typing import Any
 
-# class to evaluate attribute classification for a given attribute
-
 class AttribEvaluator:
     def __init__(self, target_attribute, attrib_mapping, calc_overall_metrics=False, iou_threshold=0.5, score_threshold=0.7):
         self.target_attribute = target_attribute
-        self.iou_threshold = iou_threshold
-        self.score_threshold = score_threshold
+        self.iou_threshold = iou_threshold # minimum iou required to count as a positive match
+        self.score_threshold = score_threshold # minimum score required to count as a positive match
 
         self.attrib_scores = []
         self.gt_labels = []
@@ -121,6 +122,8 @@ class AttribEvaluator:
         self.pred_labels.append(pred_labels)
 
         # calculate overall metrics
+        # now iterate through predicted boxes in outer for loop, since we "don't know" the ground truths,
+        # we treat the predicted boxes in order of score
         # filter out pred boxes below a score threshold
         # match each pred box with a gt box, using IoU threshold
         # pred with no match -> false positive
@@ -219,9 +222,6 @@ def calculate_metrics(predicted, targets, n, print_cm):
     counts = torch.zeros(n, dtype=torch.int32)
 
     for i in range(n):
-        # mask = torch.eq(targets, i)
-        # predicted_masked = predicted[mask]
-
         counts[i] = (targets == i).sum().item()
 
         # Calculate TP, FP, FN for the class of interest
@@ -329,114 +329,3 @@ def count_digits(n):
         return 1
     else:
         return int(math.log10(-n))+2 # +1 if you don't count the '-' 
-
-
-# BACKUP: assigning each predicted box to a gt box
-
-# # logic adapted from cocoeval.py in pycocotools
-#                 # match each pred box with a gt box
-#                 pred_gt_box_mapping = {}
-                
-#                 for i, pred_box in enumerate(pred_boxes):
-#                     max_match_iou = -1
-#                     for j, gt_box in enumerate(target['boxes']):
-#                         # if gt is already mapped to a box, ignore it
-#                         if j in pred_gt_box_mapping.values():
-#                             continue
-#                         iou = compute_iou(gt_box, pred_box)
-#                         if iou>self.iou_threshold and iou>max_match_iou:
-#                             pred_gt_box_mapping[i] = j
-#                     if i not in pred_gt_box_mapping.keys():
-#                         false_pos += 1
-
-#                 # check how many gts didn't get matched
-#                 for i in range(len(target['boxes'])):
-#                     if i not in pred_gt_box_mapping.values():
-#                         false_neg += 1
-                
-#                 # use pred_gt_box_mapping to update overall_gt_labels and overall_pred_labels
-#                 for pred_i, gt_i in pred_gt_box_mapping.items():
-#                     overall_gt_labels.append(result['attributes'][target_attribute]['labels'][pred_i])
-#                     overall_pred_labels.append(target['attributes'][target_attribute][gt_i])
-
-# def attrib_eval(results, targets, target_attribute, iou_threshold=0.5):
-#     # example of results[0]
-#     # {
-#     #     'boxes': tensor([[ 605.4993,   37.1151, 1192.0000,  384.9551], [ 651.5644,    0.0000,  950.7262,  576.1069],
-#     #             ... [ 507.8282,  425.5512, 1192.0000,  730.0000], [   0.0000,    0.0000,  427.4406,  398.8574]]), 
-#     #     'labels': tensor([1, 1, ..., 1, 1]), 
-#     #     'scores': tensor([0.3550, 0.3504, ..., 0.2879, 0.2866]), 
-#     #     'attributes':  {
-#     #         'category': {
-#     #             'scores': tensor([0.3874, 0.3921, ..., 0.3970, 0.4153]),
-#     #             'labels': tensor([2, 2, ..., 2, 2])
-#     #         }
-#     #     }
-#     # }
-
-#     # example of targets[0]
-#     # {
-#     #     'boxes': tensor([[ 262.3500,   65.1500, 1067.1300,  521.6600]]), 
-#     #     'labels': tensor([1]), 
-#     #     'image_id': 764, 
-#     #     'area': tensor([367390.1250]), 
-#     #     'iscrowd': tensor([0]), 
-#     #     'attributes': {
-#     #         'category': tensor([2])
-#     #     }
-#     # }
-
-#     # for each box in results
-#     #   calculate the iou with all boxes in targets
-#     #   find the box with the highest iou
-#     #   if iou > iou_threshold and label matches, then it is a true positive
-#     #   if iou < iou_threshold or label does not match, then it is a false positive
-
-#     # one issue with this method is that it doesn't penalize multiple detections of the same object
-#     # but the focus of this is to evaluate the attribute classification, not the object detection
-
-#     attrib_scores = torch.cat([r['attributes'][target_attribute]['scores'] for r in results])
-#     tp_fp_record = torch.zeros(attrib_scores.shape[0], dtype=torch.bool)
-#     i = 0 # index for tp_fp_record
-
-#     for result, target in zip(results, targets):
-#         for box, label in zip(result[target_attribute]['boxes'], result[target_attribute]['labels']):
-#             max_iou = 0
-#             max_iou_index = None
-
-#             for j, target_box in enumerate(target['boxes']):
-#                 iou = compute_iou(box, target_box)
-#                 if iou > max_iou:
-#                     max_iou = iou
-#                     max_iou_index = j
-
-#             if max_iou > iou_threshold and result['labels'][0] == target['labels'][0]:
-#                 # true positive
-#                 tp_fp_record[i] = True
-#             else:
-#                 pass
-#             i += 1
-
-#     # using scores and records of TP/FP, calculate precision and recall
-
-#     # sort tp_fp_record and attrib_scores in descending order of scores
-#     sorted_indices = torch.argsort(attrib_scores, descending=True)
-#     tp_fp_record = tp_fp_record[sorted_indices]
-#     attrib_scores = attrib_scores[sorted_indices]
-
-#     # calculate precision and recall
-#     num_positives = torch.sum(tp_fp_record)
-#     num_examples = len(tp_fp_record)
-#     precision = torch.cumsum(tp_fp_record, dim=0) / torch.arange(1, num_examples + 1)
-#     recall = torch.cumsum(tp_fp_record, dim=0) / num_positives
-
-#     # calculate interpolated average precision
-#     recall_levels = torch.linspace(0, 1, 11)
-#     interpolated_precision = torch.zeros_like(recall_levels)
-#     for i, level in enumerate(recall_levels):
-#         mask = recall >= level
-#         if torch.any(mask):
-#             interpolated_precision[i] = torch.max(precision[mask])
-#     average_precision = torch.mean(interpolated_precision)
-
-#     return average_precision

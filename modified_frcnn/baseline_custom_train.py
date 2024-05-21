@@ -1,5 +1,6 @@
 ## SCRIPT TO TRAIN BASELINE MODEL
 # separate training and testing of detector and classifier
+# modify flags to determine which should be trained
 
 import math
 import time
@@ -305,6 +306,7 @@ def main():
         plt.savefig(metrics_file, dpi=300)  # Saves the plot as a PNG file
         plt.close()
 
+# adapted from train_one_epoch from engine.py in torchvision
 def classifier_train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, attribute_weights_dict, scaler=None, crop_size=(299,299)):
     model.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -330,6 +332,10 @@ def classifier_train_one_epoch(model, optimizer, data_loader, device, epoch, pri
         for i, t in zip(images,targets):
             ids.append(t['image_id'])
             indices = []
+
+            # IMPT: code below assumes there is only one labeled box per image, and that
+            # box has all given attributes labelled - should be possible to adapt to multiple boxes
+            # but done this way to equalise the "weightage" of each image
 
             # for the given image/target, get the attribute data for the one labeled box
             # check if all attributes are known
@@ -363,7 +369,6 @@ def classifier_train_one_epoch(model, optimizer, data_loader, device, epoch, pri
             assert all(torch.equal(indices[0], tensor) for tensor in indices[1:]), "not all indices match! something wrong with retrieving attribute and corresponding bbox"
             # crop image
             # x,y,w,h = t['boxes'][index]
-            # print("t['boxes'][index]", t['boxes'][index])
             box = [t['boxes'][index].unsqueeze(0).to(device)]
             
             image = i.unsqueeze(0)
@@ -442,6 +447,9 @@ def classifier_train_one_epoch(model, optimizer, data_loader, device, epoch, pri
 
     return metric_logger
 
+    # some unadapted code from original function
+    # the stuff dealing with multi-GPU training was removed for ease of use
+    # 
     #     # reduce losses over all GPUs for logging purposes
     #     loss_dict_reduced = utils.reduce_dict(loss_dict)
     #     losses_reduced = sum(loss for loss in loss_dict_reduced.values())
@@ -470,10 +478,12 @@ def classifier_train_one_epoch(model, optimizer, data_loader, device, epoch, pri
 
     # return metric_logger
 
+# based on evaluate from engine.py in torchvision
 @torch.inference_mode()
-def classifier_evaluate(model, data_loader, device, attribute_mappings, crop_size = (299,299)):
-    n_threads = torch.get_num_threads()
+def classifier_evaluate(model, data_loader, device, attribute_mappings, crop_size=(299,299)):
+    # crop_size refers to size of cropped and resized building
 
+    # n_threads = torch.get_num_threads()
     torch.set_num_threads(1)
     cpu_device = torch.device("cpu")
     model.eval()
@@ -513,24 +523,6 @@ def classifier_evaluate(model, data_loader, device, attribute_mappings, crop_siz
             cropped_image = roi_align(image, box, output_size=crop_size)
             images_cropped.append(cropped_image.squeeze())
 
-        # for handling multiple gts in image
-        # common_indices = None
-        #     for target_attrib in attribute_mappings.keys():
-        #         attrib = t['attributes'][target_attrib]
-
-        #         attrib = attrib.to(device)
-
-        #         # there should only be one non-zero value in attrib
-        #         # index = torch.argmax(attrib)
-        #         indices = set(torch.nonzero(attrib))
-        #         if common_indices:
-        #             common_indices = common_indices.intersection(indices)
-        #         else:
-        #             common_indices = indices
-
-        #     for index in common_indices:
-        #         target_attrib_dict[target_attrib].append(attrib[index])
-
         targets_dict = {k:torch.stack(v).to(cpu_device) for k,v in target_attrib_dict.items()}
         images = torch.stack(images_cropped)
 
@@ -545,10 +537,8 @@ def classifier_evaluate(model, data_loader, device, attribute_mappings, crop_siz
         # get predicted class
         predicted_dict = {k:torch.argmax(v, dim=1).to(cpu_device) for k,v in outputs_logits_dict.items()}
 
-        # [{k: v.to(cpu_device) for k, v in t.items()} for t in outputs]
         model_time = time.time() - model_time
 
-        # evaluator_time = time.time()
 
         assert predicted_dict.keys() == targets_dict.keys(), "keys from output of model doesn't match keys in targets"
         
@@ -556,7 +546,6 @@ def classifier_evaluate(model, data_loader, device, attribute_mappings, crop_siz
             gt[attrib_name].append(targets_dict[attrib_name])
             dt[attrib_name].append(predicted_dict[attrib_name])
 
-        # evaluator_time = time.time() - evaluator_time
         metric_logger.update(model_time=model_time)
 
     # gather the stats from all processes
@@ -564,7 +553,6 @@ def classifier_evaluate(model, data_loader, device, attribute_mappings, crop_siz
     print("Averaged stats:", metric_logger)
 
     f1s = np.zeros(len(gt.keys()))
-    # overall_f1s = np.zeros(len(gt.keys()))
 
     for attrib_index, attrib_name in enumerate(gt.keys()):
         print(f"evaluating {attrib_name}")
@@ -577,9 +565,6 @@ def classifier_evaluate(model, data_loader, device, attribute_mappings, crop_siz
         counts = torch.zeros(n, dtype=torch.int32)
 
         for i in range(n):
-            # mask = torch.eq(targets, i)
-            # predicted_masked = predicted[mask]
-
             counts[i] = (targets == i).sum().item()
 
             # Calculate TP, FP, FN for the class of interest
@@ -622,34 +607,6 @@ def classifier_evaluate(model, data_loader, device, attribute_mappings, crop_siz
         # print the confusion matrix
         print_confusion_matrix(confusion_matrix, class_labels=None)
 
-
-
-    # # calculate precision, recall, f1 for predicted and targets
-    # tp = torch.sum(predicted == targets).item()
-    # fp = torch.sum(predicted != targets).item()
-    # fn = torch.sum(predicted != targets).item()
-
-    # if tp+fp == 0:
-    #     precision = -1
-    # else:
-    #     precision = tp / (tp + fp)
-
-    # if tp+fn == 0:
-    #     recall = -1
-    # else:
-    #     recall = tp / (tp + fn)
-
-    # if precision+recall == 0:
-    #     f1 = -1
-    # else:
-    #     f1 = 2 * (precision * recall) / (precision + recall)
-
-    # print(f"precision: {precision}, recall: {recall}, f1: {f1}\n")
-
-    # # accumulate predictions from all images
-    # coco_evaluator.accumulate()
-    # coco_evaluator.summarize()
-    torch.set_num_threads(n_threads)
     return f1s
 
 def get_transform(train):

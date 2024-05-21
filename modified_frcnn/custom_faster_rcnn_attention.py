@@ -1,3 +1,6 @@
+## SCRIPT CONTAINING CODE FOR MODIFIED FASTER-RCNN MODEL AND FUNCTIONS RELATED TO IT
+# not meant to be run standalone
+
 import utils
 import math
 import sys
@@ -34,22 +37,24 @@ from coco_eval import CocoEvaluator
 # main class for modified Faster R-CNN
 class CustomFasterRCNN(FasterRCNN):
 
-    # num_classes can technically be any number > 2, but was generally tested with 2 (i.e. building or not building)
-    # attribute_mappings is a dictionary of dictionaries that map attribute classes to their corresponding indices
-    # attribute_weights_dict is a dictionary of dictionaries that map attribute indices to their corresponding weights
-    # num_heads is the number of heads for the multihead attention layer
-    # use_attention is a boolean that determines whether attention is used (i.e. modification 3 in the paper)
-    # attention_per_attrib is a boolean that determines whether separate self-attention are applied per attribute (vs sharing one)
-    # custom_box_predictor is a boolean that determines whether self-attention is used for the box predictor
-        # the default box_predictor is a FastRCNNPredictor, defined in pytorch
-    # use_reduced_features_for_attrib is a boolean that determines whether reduced features are used for attribute prediction
-        # i.e. modification 1 vs 2 in the paper
-    # parallel backbone is a boolean that determines whether a parallel backbone is used for attribute prediction
-        # i.e. modification 4 in the paper
-
+    
     def __init__(self, backbone, num_classes=None, attribute_mappings=None, attribute_weights_dict=None, 
                  num_heads = 2, use_attention=True, attention_per_attrib=True, custom_box_predictor=False,  
                  use_reduced_features_for_attrib=False, parallel_backbone=None, **kwargs):
+        """
+        num_classes can technically be any number > 2, but was generally tested with 2 (i.e. building or not building)
+        attribute_mappings is a dictionary of dictionaries that map attribute classes to their corresponding indices
+        attribute_weights_dict is a dictionary of dictionaries that map attribute indices to their corresponding weights
+        num_heads is the number of heads for the multihead attention layer
+        use_attention is a boolean that determines whether attention is used (i.e. modification 3 in the paper)
+        attention_per_attrib is a boolean that determines whether separate self-attention are applied per attribute (vs sharing one)
+        custom_box_predictor is a boolean that determines whether self-attention is used for the box predictor
+            the default box_predictor is a FastRCNNPredictor, defined in pytorch
+        use_reduced_features_for_attrib is a boolean that determines whether reduced features are used for attribute prediction
+            i.e. modification 1 vs 2 in the paper
+        parallel backbone is a boolean that determines whether a parallel backbone is used for attribute prediction
+            # i.e. modification 4 in the paper
+        """
         super().__init__(backbone, num_classes, **kwargs)
 
         channels = backbone.out_channels
@@ -74,11 +79,7 @@ class CustomFasterRCNN(FasterRCNN):
         self.roi_heads = CustomRoIHead(
             attribute_weights_dict=attribute_weights_dict,
             attribute_predictor=AttributesPredictor(
-                # channels=channels,
-                # num_heads=num_heads,
                 attribute_mappings=attribute_mappings,
-                # height=height,
-                # width=width,
                 use_attention = use_attention,
                 attention_per_attrib=attention_per_attrib,
                 attributes_head_params = attributes_head_params,
@@ -188,7 +189,7 @@ class CustomFasterRCNN(FasterRCNN):
             # return losses for training and detections for inference
             return self.eager_outputs(losses, detections)
 
-# Faster R-CNN models with different backbones
+# Faster R-CNN model checkpoints with different backbones
 model_urls = {
     "fasterrcnn_resnet50_fpn_coco": "https://download.pytorch.org/models/fasterrcnn_resnet50_fpn_coco-258fb6c6.pth",
     "fasterrcnn_mobilenet_v3_large_320_fpn_coco": "https://download.pytorch.org/models/fasterrcnn_mobilenet_v3_large_320_fpn-907ea3f9.pth",
@@ -994,6 +995,7 @@ def evaluate(model, data_loader, device, eval_attrib=True, calc_overall_metrics=
 
     if eval_attrib:
         attrib_evaluator_list = []
+        # create an AttribEvaluator for each attribute
         for attrib_name in orig_dataset.attrib_mappings.keys():
             attrib_evaluator = AttribEvaluator(attrib_name, 
                                                attrib_mapping=orig_dataset.attrib_mappings, 
@@ -1072,32 +1074,7 @@ def get_dataset_from_dataloader(dataloader):
         
     raise ValueError("Could not find dataset in dataloader")
 
-
-def modify_coco_attrib(coco_obj, attrib_name):
-    coco_obj = copy.deepcopy(coco_obj)
-
-    categories = set()
-
-    for ann in coco_obj.dataset["annotations"]:
-        ann["category_id"] = ann["attributes"][attrib_name]
-        categories.add(ann["attributes"][attrib_name])
-
-    coco_obj.dataset["categories"] = [{"id": i} for i in sorted(categories)]
-    coco_obj.createIndex()
-
-    return coco_obj
-
-def modify_results(results, attrib_name):
-    results = copy.deepcopy(results)
-
-    for img_id, output in results.items():
-
-        # output["scores"] = output["attributes"][attrib_name]["scores"]
-        output["labels"] = output["attributes"][attrib_name]["labels"]
-        
-    return results
-
-
+# adapted from coco_utils.py
 def convert_to_coco_api(ds):
     coco_ds = COCO()
     # annotation IDs need to start at 1, not 0, see torchvision issue #1530
@@ -1105,9 +1082,7 @@ def convert_to_coco_api(ds):
     dataset = {"images": [], "categories": [], "annotations": []}
     categories = set()
     for img_idx in range(len(ds)):
-        # find better way to get target
-        # targets = ds.get_annotations(img_idx)
-        img, targets = ds[img_idx]
+        img, targets = ds[img_idx] # could use get_target() for efficiency
         image_id = targets["image_id"]
         img_dict = {}
         img_dict["id"] = image_id
@@ -1164,24 +1139,6 @@ def get_coco_api_from_dataset(dataset):
     return convert_to_coco_api(dataset)
 
 
-# def _get_iou_types(model):
-#     model_without_ddp = model
-#     if isinstance(model, torch.nn.parallel.DistributedDataParallel):
-#         model_without_ddp = model.module
-#     iou_types = ["bbox"]
-#     if isinstance(model_without_ddp, torchvision.models.detection.MaskRCNN):
-#         iou_types.append("segm")
-#     if isinstance(model_without_ddp, torchvision.models.detection.KeypointRCNN):
-#         iou_types.append("keypoints")
-#     if isinstance(model_without_ddp, CustomFasterRCNN):
-#         iou_types.append("attrib")
-#     return iou_types
-
-# def convert_to_xywh(boxes):
-#     xmin, ymin, xmax, ymax = boxes.unbind(1)
-#     return torch.stack((xmin, ymin, xmax - xmin, ymax - ymin), dim=1)
-
-
 def positional_encoding_2d(H, W, D):
     if D % 2 != 0:
         raise ValueError("Depth D should be divisible by 2.")
@@ -1197,76 +1154,7 @@ def positional_encoding_2d(H, W, D):
     
     return pe
 
-
-# numpy version
-# def positional_encoding_2d(H, W, D):
-#     """
-#     Generate a 2D positional encoding.
-    
-#     Parameters:
-#     - H: Height of the tensor.
-#     - W: Width of the tensor.
-#     - D: Depth of the feature dimension, should be divisible by 2 for this encoding.
-    
-#     Returns:
-#     - A tensor of shape [H, W, D] with positional encodings.
-#     """
-#     if D % 2 != 0:
-#         raise ValueError("Depth D should be divisible by 2.")
-    
-#     # Compute the positional encodings
-#     pe = np.zeros((H, W, D))
-#     position_y = np.arange(H).reshape(-1, 1, 1)
-#     position_x = np.arange(W).reshape(1, -1, 1)
-#     div_term = np.exp(np.arange(0, D, 2) * -(np.log(10000.0) / D))
-    
-#     pe[:, :, 0::2] = np.sin(position_y * div_term) + np.sin(position_x * div_term)  # Even indices
-#     pe[:, :, 1::2] = np.cos(position_y * div_term) + np.cos(position_x * div_term)  # Odd indices
-    
-#     pe = torch.tensor(pe, dtype=torch.float32)
-#     return pe
-
-# class AttribEvaluator(CocoEvaluator):
-#     def __init__(self, dataset_name, iou_types):
-#         super().__init__(dataset_name, iou_types)
-    
-#     def prepare(self, predictions, iou_type):
-#         if iou_type == "bbox":
-#             return self.prepare_for_coco_detection(predictions)
-#         if iou_type == "segm":
-#             return self.prepare_for_coco_segmentation(predictions)
-#         if iou_type == "keypoints":
-#             return self.prepare_for_coco_keypoint(predictions)
-#         if iou_type == "attrib":
-#             return self.prepare_for_coco_attrib(predictions)
-#         raise ValueError(f"Unknown iou type {iou_type}")
-    
-#     def prepare_for_coco_attrib(self, predictions):
-#         coco_results = []
-#         for original_id, prediction in predictions.items():
-#             if len(prediction) == 0:
-#                 continue
-
-#             boxes = prediction["boxes"]
-#             boxes = convert_to_xywh(boxes).tolist()
-#             attrib_scores = prediction["attribute_score"].tolist()
-#             attrib_labels = prediction["attribute_label"].tolist()
-
-#             coco_results.extend(
-#                 [
-#                     {
-#                         "image_id": original_id,
-#                         "category_id": attrib_labels[k],
-#                         "bbox": box,
-#                         "score": attrib_scores[k],
-#                     }
-#                     for k, box in enumerate(boxes)
-#                 ]
-#             )
-#         return coco_results
-
-
-
+# adopted from engine.py
 def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, scaler=None):
     model.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -1280,11 +1168,10 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, sc
 
         lr_scheduler = torch.optim.lr_scheduler.LinearLR(
             optimizer, start_factor=warmup_factor, total_iters=warmup_iters
-        )# work out when's the right time to send this to device.
+        )
 
     for images, targets in metric_logger.log_every(data_loader, print_freq, header):
         images = list(image.to(device) for image in images)
-        # print(targets)
         targets = [{k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in t.items()} for t in targets]
 
         # need to specially handle attributes, because v is a Dict[str, Tensor]
@@ -1324,53 +1211,7 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, sc
 
     return metric_logger
 
-
-# @register_model()
-# @handle_legacy_interface(
-#     weights=("pretrained", FasterRCNN_ResNet50_FPN_Weights.COCO_V1),
-#     weights_backbone=("pretrained_backbone", ResNet50_Weights.IMAGENET1K_V1),
-# )
-
-
-# def custom_fasterrcnn_resnet50_fpn(
-#     *,
-#     weights: Optional[FasterRCNN_ResNet50_FPN_Weights] = None,
-#     progress: bool = True,
-#     num_classes: Optional[int] = None,
-#     weights_backbone: Optional[ResNet50_Weights] = ResNet50_Weights.IMAGENET1K_V1,
-#     trainable_backbone_layers: Optional[int] = None,
-#     **kwargs: Any,
-# ) -> CustomFasterRCNN:
-#     weights = FasterRCNN_ResNet50_FPN_Weights.verify(weights)
-#     weights_backbone = ResNet50_Weights.verify(weights_backbone)
-#
-#     if weights is not None:
-#         weights_backbone = None
-#         num_classes = _ovewrite_value_param("num_classes", num_classes, len(weights.meta["categories"]))
-#     elif num_classes is None:
-#         num_classes = 91
-#
-#     is_trained = weights is not None or weights_backbone is not None
-#     trainable_backbone_layers = _validate_trainable_layers(is_trained, trainable_backbone_layers, 5, 3)
-#     norm_layer = misc_nn_ops.FrozenBatchNorm2d if is_trained else nn.BatchNorm2d
-#
-#     backbone = resnet50(weights=weights_backbone, progress=progress, norm_layer=norm_layer)
-#     backbone = _resnet_fpn_extractor(backbone, trainable_backbone_layers)
-#     model = CustomFasterRCNN(backbone, num_classes=num_classes, **kwargs)
-#
-#     if weights is not None:
-#         model.load_state_dict(weights.get_state_dict(progress=progress, check_hash=True))
-#         if weights == FasterRCNN_ResNet50_FPN_Weights.COCO_V1:
-#             overwrite_eps(model, 0.0)
-#
-#     return model
-#
-# def _ovewrite_value_param(param: str, actual: Optional[V], expected: V) -> V:
-#     if actual is not None:
-#         if actual != expected:
-#             raise ValueError(f"The parameter '{param}' expected value {expected} but got {actual} instead.")
-#     return expected
-
+# use model on a particular image and save the image with annotated results to disk
 def eval_image(dataset, epoch, device, font_size=32,
                 save=True, index=None, target_attrib=None, show_attrib=False, 
                 model=None, subfolder=None, eval_transform=None, score_threshold=0.4):
@@ -1392,23 +1233,10 @@ def eval_image(dataset, epoch, device, font_size=32,
 
     image_id = target['image_id']
 
-    # target = None # problem is full_dataset has transform where train=True, so some targets are randomly flipped
-    # for i in range(len(dataset)):
-    #     t = dataset.get_target(i)
-    #     if t['image_id'] == index:
-    #         target = t
-    #         break
-    # else:
-    #     print('index does not exist in dataset')
-    #     return 
 
     target_boxes = target['boxes']
 
     target_labels = [dataset.reverse_attrib_mappings[target_attrib][int(x)] for x in target['attributes'][target_attrib]]
-    # attributes_strings = {}
-    # for attrib_name, attrib_tensor in target['attributes'].items():
-    #     attributes_strings[attrib_name] = [dataset.reverse_attrib_mappings[attrib_name][int(x)] for x in attrib_tensor]
-    # #target_labels = [f"{full_dataset.material_classes_inverse[int(attrib_label)]}" for attrib_label in target['attributes']]
 
     # check if image exists
     possible_image_paths = [join(dataset.img_dir, f"image_{image_id}.png"),join(dataset.img_dir, f"image_{image_id}.jpg")] 
@@ -1432,13 +1260,8 @@ def eval_image(dataset, epoch, device, font_size=32,
     
     if model:
     
-        #eval_transform = get_transform(train=False)
-        
         model.eval()
         with torch.no_grad():
-            # x = eval_transform(image)
-            # convert RGBA -> RGB and move to device
-            # x = x[:3, ...].to(device)
             predictions = model([image_tensor, ])
             pred = predictions[0]
 
@@ -1465,11 +1288,10 @@ def eval_image(dataset, epoch, device, font_size=32,
         else:
             # label=1 is building, not sure I need to make that look nicer
             pred_labels = [f"{score:.3f}" for label, score in zip(pred["labels"], pred["scores"])]
-        # print(pred["labels"])
-        # print(pred["scores"])
+
         output_image = draw_bounding_boxes(output_image, pred_boxes, pred_labels, colors="red", font='Roboto-Regular.ttf', font_size=32)
         
-    
+    # save plot to disk
     plt.figure(figsize=(24, 24))
     plt.imshow(output_image.permute(1, 2, 0))
     if save:
@@ -1484,213 +1306,3 @@ def eval_image(dataset, epoch, device, font_size=32,
     else:
         plt.show()
     plt.close() 
-
-# def custom_fasterrcnn_resnet50_fpn(
-#     pretrained=False, progress=True, num_classes=91, attrib_mappings=None, attribute_weights_dict=None, pretrained_backbone=True, trainable_backbone_layers=None, num_heads = 2,
-#     attention_per_attrib=True, custom_box_predictor=False, use_reduced_features_for_attrib=False, use_attention=True, parallel_backbone=False, **kwargs
-# ):
-#     """
-#     Constructs a Faster R-CNN model with a ResNet-50-FPN backbone.
-
-#     Reference: `"Faster R-CNN: Towards Real-Time Object Detection with
-#     Region Proposal Networks" <https://arxiv.org/abs/1506.01497>`_.
-
-#     The input to the model is expected to be a list of tensors, each of shape ``[C, H, W]``, one for each
-#     image, and should be in ``0-1`` range. Different images can have different sizes.
-
-#     The behavior of the model changes depending if it is in training or evaluation mode.
-
-#     During training, the model expects both the input tensors, as well as a targets (list of dictionary),
-#     containing:
-
-#         - boxes (``FloatTensor[N, 4]``): the ground-truth boxes in ``[x1, y1, x2, y2]`` format, with
-#           ``0 <= x1 < x2 <= W`` and ``0 <= y1 < y2 <= H``.
-#         - labels (``Int64Tensor[N]``): the class label for each ground-truth box
-
-#     The model returns a ``Dict[Tensor]`` during training, containing the classification and regression
-#     losses for both the RPN and the R-CNN.
-
-#     During inference, the model requires only the input tensors, and returns the post-processed
-#     predictions as a ``List[Dict[Tensor]]``, one for each input image. The fields of the ``Dict`` are as
-#     follows, where ``N`` is the number of detections:
-
-#         - boxes (``FloatTensor[N, 4]``): the predicted boxes in ``[x1, y1, x2, y2]`` format, with
-#           ``0 <= x1 < x2 <= W`` and ``0 <= y1 < y2 <= H``.
-#         - labels (``Int64Tensor[N]``): the predicted labels for each detection
-#         - scores (``Tensor[N]``): the scores of each detection
-
-#     For more details on the output, you may refer to :ref:`instance_seg_output`.
-
-#     Faster R-CNN is exportable to ONNX for a fixed batch size with inputs images of fixed size.
-
-#     Example::
-
-#         >>> model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=True)
-#         >>> # For training
-#         >>> images, boxes = torch.rand(4, 3, 600, 1200), torch.rand(4, 11, 4)
-#         >>> boxes[:, :, 2:4] = boxes[:, :, 0:2] + boxes[:, :, 2:4]
-#         >>> labels = torch.randint(1, 91, (4, 11))
-#         >>> images = list(image for image in images)
-#         >>> targets = []
-#         >>> for i in range(len(images)):
-#         >>>     d = {}
-#         >>>     d['boxes'] = boxes[i]
-#         >>>     d['labels'] = labels[i]
-#         >>>     targets.append(d)
-#         >>> output = model(images, targets)
-#         >>> # For inference
-#         >>> model.eval()
-#         >>> x = [torch.rand(3, 300, 400), torch.rand(3, 500, 400)]
-#         >>> predictions = model(x)
-#         >>>
-#         >>> # optionally, if you want to export the model to ONNX:
-#         >>> torch.onnx.export(model, x, "faster_rcnn.onnx", opset_version = 11)
-
-#     Args:
-#         pretrained (bool): If True, returns a model pre-trained on COCO train2017
-#         progress (bool): If True, displays a progress bar of the download to stderr
-#         num_classes (int): number of output classes of the model (including the background)
-#         pretrained_backbone (bool): If True, returns a model with backbone pre-trained on Imagenet
-#         trainable_backbone_layers (int): number of trainable (not frozen) resnet layers starting from final block.
-#             Valid values are between 0 and 5, with 5 meaning all backbone layers are trainable. If ``None`` is
-#             passed (the default) this value is set to 3.
-#     """
-#     trainable_backbone_layers = _validate_trainable_layers(
-#         pretrained or pretrained_backbone, trainable_backbone_layers, 5, 3
-#     )
-
-#     if pretrained:
-#         # no need to download the backbone if pretrained is set
-#         pretrained_backbone = False
-
-#     if attrib_mappings == None:
-#         raise ValueError("need to map attributes")
-
-#     if pretrained_backbone:
-#         backbone = resnet50(weights=ResNet50_Weights.IMAGENET1K_V1, progress=progress,
-#                             norm_layer=misc_nn_ops.FrozenBatchNorm2d)
-#         if parallel_backbone:
-#             parallel_backbone = resnet50(weights=ResNet50_Weights.IMAGENET1K_V1, progress=progress,
-#                                          norm_layer=misc_nn_ops.FrozenBatchNorm2d)
-#     else:
-#         backbone = resnet50(progress=progress, norm_layer=misc_nn_ops.FrozenBatchNorm2d)
-#         if parallel_backbone:
-#             parallel_backbone = resnet50(progress=progress, norm_layer=misc_nn_ops.FrozenBatchNorm2d)
-
-#     backbone = _resnet_fpn_extractor(backbone, trainable_backbone_layers)
-#     if parallel_backbone:
-#         parallel_backbone = _resnet_fpn_extractor(parallel_backbone, trainable_backbone_layers)
-#     model = CustomFasterRCNN(backbone, num_classes=num_classes, attribute_mappings=attrib_mappings, attribute_weights_dict=attribute_weights_dict,
-#         attention_per_attrib=attention_per_attrib, custom_box_predictor=custom_box_predictor, use_attention=use_attention, num_heads= num_heads,
-#         use_reduced_features_for_attrib=use_reduced_features_for_attrib, parallel_backbone=parallel_backbone, **kwargs)
-#     if pretrained:
-#         state_dict = load_state_dict_from_url(model_urls["fasterrcnn_resnet50_fpn_coco"], progress=progress)
-#         model.load_state_dict(state_dict)
-#         overwrite_eps(model, 0.0)
-#     return model
-
-
-# def custom_fasterrcnn_resnet101_fpn(
-#     pretrained=False, progress=True, num_classes=91, attrib_mappings=None, attribute_weights_dict=None, pretrained_backbone=True, trainable_backbone_layers=None,
-#     attention_per_attrib=True, custom_box_predictor=False, num_heads = 2, parallel_backbone=None, **kwargs
-# ):
-#     """
-#     Constructs a Faster R-CNN model with a ResNet-101-FPN backbone.
-
-#     Reference: `"Faster R-CNN: Towards Real-Time Object Detection with
-#     Region Proposal Networks" <https://arxiv.org/abs/1506.01497>`_.
-
-#     The input to the model is expected to be a list of tensors, each of shape ``[C, H, W]``, one for each
-#     image, and should be in ``0-1`` range. Different images can have different sizes.
-
-#     The behavior of the model changes depending if it is in training or evaluation mode.
-
-#     During training, the model expects both the input tensors, as well as a targets (list of dictionary),
-#     containing:
-
-#         - boxes (``FloatTensor[N, 4]``): the ground-truth boxes in ``[x1, y1, x2, y2]`` format, with
-#           ``0 <= x1 < x2 <= W`` and ``0 <= y1 < y2 <= H``.
-#         - labels (``Int64Tensor[N]``): the class label for each ground-truth box
-
-#     The model returns a ``Dict[Tensor]`` during training, containing the classification and regression
-#     losses for both the RPN and the R-CNN.
-
-#     During inference, the model requires only the input tensors, and returns the post-processed
-#     predictions as a ``List[Dict[Tensor]]``, one for each input image. The fields of the ``Dict`` are as
-#     follows, where ``N`` is the number of detections:
-
-#         - boxes (``FloatTensor[N, 4]``): the predicted boxes in ``[x1, y1, x2, y2]`` format, with
-#           ``0 <= x1 < x2 <= W`` and ``0 <= y1 < y2 <= H``.
-#         - labels (``Int64Tensor[N]``): the predicted labels for each detection
-#         - scores (``Tensor[N]``): the scores of each detection
-
-#     For more details on the output, you may refer to :ref:`instance_seg_output`.
-
-#     Faster R-CNN is exportable to ONNX for a fixed batch size with inputs images of fixed size.
-
-#     Example::
-
-#         >>> model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=True)
-#         >>> # For training
-#         >>> images, boxes = torch.rand(4, 3, 600, 1200), torch.rand(4, 11, 4)
-#         >>> boxes[:, :, 2:4] = boxes[:, :, 0:2] + boxes[:, :, 2:4]
-#         >>> labels = torch.randint(1, 91, (4, 11))
-#         >>> images = list(image for image in images)
-#         >>> targets = []
-#         >>> for i in range(len(images)):
-#         >>>     d = {}
-#         >>>     d['boxes'] = boxes[i]
-#         >>>     d['labels'] = labels[i]
-#         >>>     targets.append(d)
-#         >>> output = model(images, targets)
-#         >>> # For inference
-#         >>> model.eval()
-#         >>> x = [torch.rand(3, 300, 400), torch.rand(3, 500, 400)]
-#         >>> predictions = model(x)
-#         >>>
-#         >>> # optionally, if you want to export the model to ONNX:
-#         >>> torch.onnx.export(model, x, "faster_rcnn.onnx", opset_version = 11)
-
-#     Args:
-#         pretrained (bool): If True, returns a model pre-trained on COCO train2017
-#         progress (bool): If True, displays a progress bar of the download to stderr
-#         num_classes (int): number of output classes of the model (including the background)
-#         pretrained_backbone (bool): If True, returns a model with backbone pre-trained on Imagenet
-#         trainable_backbone_layers (int): number of trainable (not frozen) resnet layers starting from final block.
-#             Valid values are between 0 and 5, with 5 meaning all backbone layers are trainable. If ``None`` is
-#             passed (the default) this value is set to 3.
-#     """
-
-#     trainable_backbone_layers = _validate_trainable_layers(
-#         pretrained or pretrained_backbone, trainable_backbone_layers, 5, 3
-#     )
-
-#     if pretrained:
-#         # no need to download the backbone if pretrained is set
-#         pretrained_backbone = False
-
-#     if attrib_mappings == None:
-#         raise ValueError("need to map attributes")
-
-#     if pretrained_backbone:
-#         backbone = resnet101(weights=ResNet101_Weights.IMAGENET1K_V1, progress=progress,
-#                             norm_layer=misc_nn_ops.FrozenBatchNorm2d)
-#         if parallel_backbone:
-#             parallel_backbone = resnet101(weights=ResNet101_Weights.IMAGENET1K_V1, progress=progress,
-#                                   norm_layer=misc_nn_ops.FrozenBatchNorm2d)
-#     else:
-#         backbone = resnet101(progress=progress, norm_layer=misc_nn_ops.FrozenBatchNorm2d)
-
-#         if parallel_backbone:
-#             parallel_backbone = resnet101(progress=progress, norm_layer=misc_nn_ops.FrozenBatchNorm2d)
-
-#     backbone = _resnet_fpn_extractor(backbone, trainable_backbone_layers)
-#     if parallel_backbone:
-#         parallel_backbone = _resnet_fpn_extractor(parallel_backbone, trainable_backbone_layers) # should this use a different trainable_backbone_layers?
-#     model = CustomFasterRCNN(backbone, num_classes=num_classes, attribute_mappings=attrib_mappings, attribute_weights_dict=attribute_weights_dict,
-#         attention_per_attrib=attention_per_attrib, custom_box_predictor=custom_box_predictor, num_heads=num_heads, parallel_backbone=parallel_backbone, **kwargs)
-#     if pretrained:
-#         state_dict = load_state_dict_from_url(model_urls["fasterrcnn_resnet50_fpn_coco"], progress=progress)
-#         model.load_state_dict(state_dict)
-#         overwrite_eps(model, 0.0)
-#     return model

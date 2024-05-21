@@ -1,44 +1,38 @@
+## SCRIPT TO TEST BASELINE MODEL
+# detector and classifier models trained in baseline_custom_train.py
+# models will be loaded and tested in this script
+# uses batch size of 1 for evaluation
 
+import os
+import json
+import utils
+import time
+from collections import defaultdict
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.ops import roi_align
-import os
-from inception.inception_resnet_v2 import Inception_ResNetv2_multitask
 from torchvision.models.detection import fasterrcnn_resnet50_fpn
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchvision.transforms import v2 as T
-from collections import defaultdict
-from attrib_eval import compute_iou
-import json
-from custom_frcnn_dataset import CustomFRCNNAttentionDataset
-import utils
 from torch.utils.data import DataLoader
-import time
-from attrib_eval import print_confusion_matrix
-from engine import evaluate
-from baseline_custom_train import classifier_evaluate
 from torchvision.models.detection.backbone_utils import _resnet_fpn_extractor
 from torchvision.models.resnet import resnet101
 from torchvision.ops import misc as misc_nn_ops
 
-# train faster rcnn by itself
-# then train inception resnet v2 by itself
-# then test them together
-
-# !!
-# should i pick out the box with the highest confidence score
-# or the box with the highest iou with the ground truth
-# if my goal is to evaluate the classification model's performance
-
-# !!
-# assuming batch size of 1
+# from local files
+from attrib_eval import print_confusion_matrix, compute_iou
+from baseline_custom_train import classifier_evaluate
+from custom_frcnn_dataset import CustomFRCNNAttentionDataset
+from engine import evaluate
+from inception.inception_resnet_v2 import Inception_ResNetv2_multitask
 
 @torch.inference_mode()
 def main():
+    # uses job ids and epochs to find corresponding checkpoint file
     detector_job_id = 215575
     detector_epoch = 24
-    detector_resnet101 = True
+    detector_resnet101 = True # whether detector uses resnet101 or resnet50 for backbone
     classifier_job_id = 215628
     classifier_epoch = 13
     print(f"Using detector from {detector_job_id}, epoch={detector_epoch}")
@@ -52,6 +46,7 @@ def main():
         attrib_mappings = json.load(f)
     exclude = None
 
+    # count the number of classes per attribute
     num_classes_dict = {}
     for k,v in attrib_mappings.items():
         num_classes_dict[k] = len(v)
@@ -63,22 +58,12 @@ def main():
         attrib_mappings=attrib_mappings, 
         exclude=exclude)
 
+    # load test dataset from disk
     test_id_file = 'data/test_ids.txt'
     with open(test_id_file, 'r') as f:
         test_ids = [int(i) for i in f.read().split(',')]
     test_dataset = torch.utils.data.Subset(raw_dataset, test_ids)
     test_dataloader = DataLoader(test_dataset, batch_size=4, shuffle=False, collate_fn=utils.collate_fn)
-
-    # val_id_file = 'data/val_ids.txt'
-    # with open(val_id_file, 'r') as f:
-    #     val_ids = [int(i) for i in f.read().split(',')]
-    # val_dataset = torch.utils.data.Subset(raw_dataset, val_ids)
-    # validation_dataloader = DataLoader(val_dataset, batch_size=1, shuffle=False, collate_fn=utils.collate_fn)
-
-    # train_id_file = 'data/train_ids.txt'
-    # with open(train_id_file, 'r') as f:
-    #     train_ids = [int(i) for i in f.read().split(',')]
-    # train_dataset = torch.utils.data.Subset(raw_dataset, train_ids)
 
     # train on the GPU or on the CPU, if a GPU is not available
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
@@ -87,7 +72,7 @@ def main():
     print("======EVALUATE OBJECT DETECTION======")
 
     detector = fasterrcnn_resnet50_fpn(weights="DEFAULT")
-    if detector_resnet101:
+    if detector_resnet101: # if model was trained with resnet101 backbone, load a resnet101 backbone
         backbone = resnet101(progress=True, norm_layer=misc_nn_ops.FrozenBatchNorm2d)
         backbone = _resnet_fpn_extractor(backbone, 5)
         detector.backbone = backbone
@@ -97,7 +82,6 @@ def main():
     detector.to(device)
 
     # evaluate detection performance
-    
     evaluate(detector, test_dataloader, device=device)
 
     print("======EVALUATE ATTRIBUTE PREDICTION=======")
@@ -107,7 +91,7 @@ def main():
     classifier.load_state_dict(checkpoint['model_state_dict'])
     classifier.to(device)
 
-    
+    # evaluate classification performance
     classifier_evaluate(classifier, test_dataloader, device, attrib_mappings)
 
     print("=======EVALUATE OVERALL PERFORMANCE=======")
@@ -130,31 +114,22 @@ def main():
 
         model_time = time.time()
 
+        # process the images in the current batch and store detection performance statistics
         target_attribs, pred_attribs, false_pos, false_neg, num_gt = model(images, targets)
-        # predicted_attrib_dict = predicted_attrib_dict_list[0] # because not using dataloader, don't need list
-
         total_false_pos += false_pos
         total_false_neg += false_neg
         total_num_gt += num_gt
 
+        # store the ground truth and predicted attributes
         for k,v in pred_attribs.items():
             pred_attribs[k] = v.to(cpu_device)
 
         for k in target_attribs.keys():
-
             dt[k].append(pred_attribs[k].to(cpu_device))
             gt[k].append(target_attribs[k])
             
-
         model_time = time.time() - model_time
         metric_logger.update(model_time=model_time)
-
-        # Print memory usage
-        # print(f"Current memory allocated: {torch.cuda.memory_allocated(device)/1024**3:.2f} GB")
-        # print(f"Max memory allocated: {torch.cuda.max_memory_allocated(device)/1024**3:.2f} GB")
-        # print(f"Current memory cached: {torch.cuda.memory_reserved(device)/1024**3:.2f} GB")
-        # print(f"Max memory cached: {torch.cuda.max_memory_reserved(device)/1024**3:.2f} GB")
-        # torch.cuda.reset_peak_memory_stats(device)
 
     for k,v in dt.items():
         dt[k] = torch.cat(v)
@@ -172,10 +147,11 @@ def main():
     print(f"unmatched gts per image: {false_neg_per_image}")
     print(f"Mean labels per image: {num_gts_per_image}")
 
+    # evaluate attribute prediction performance for each attribute
     for attrib_name in gt.keys():
         print(f"evaluating {attrib_name}")
-        predicted = dt[attrib_name]#torch.cat(dt[attrib_name])
-        targets = gt[attrib_name]#torch.cat(gt[attrib_name])
+        predicted = dt[attrib_name]
+        targets = gt[attrib_name]
         n = len(attrib_mappings[attrib_name])
         precision = torch.zeros(n, dtype=torch.float32)
         recall = torch.zeros(n, dtype=torch.float32)
@@ -183,9 +159,6 @@ def main():
         counts = torch.zeros(n, dtype=torch.int32)
 
         for i in range(n):
-            # mask = torch.eq(targets, i)
-            # predicted_masked = predicted[mask]
-
             counts[i] = (targets == i).sum().item()
 
             # Calculate TP, FP, FN for the class of interest
@@ -228,7 +201,10 @@ def main():
         print_confusion_matrix(confusion_matrix, class_labels=None)
 
 
-
+# combined model of detector and classifier
+# passes image through detector, then crops out predicted boxes with score>conf_threshold
+# predicted boxes are matched to ground truth boxes, and false positives/negatives are identified
+# successful matches are sent to classifier to be classified, then compared to ground truth attribute
 class DetectorAndClassifier(nn.Module):
     def __init__(self, detector, classifier, conf_threshold=0.7, iou_threshold=0.5):
         super(DetectorAndClassifier, self).__init__()
@@ -263,6 +239,7 @@ class DetectorAndClassifier(nn.Module):
         false_pos = 0
         false_neg = 0
         num_gts = 0
+
         # process the detections to get the bounding boxes
         assert len(detections) == len(targets), "length of detections != targets??"
         for d, target, image in zip(detections, targets, images):
@@ -309,14 +286,6 @@ class DetectorAndClassifier(nn.Module):
             false_neg += len(target['boxes']) - len(pred_gt_box_mapping)
             num_gts += len(target['boxes'])
 
-            
-
-
-        # boxes = []
-        # for d in detections:
-        #     # pick out the box with the highest confidence score
-        #     box = d['boxes'][torch.argmax(d['scores'])]
-        #     boxes.append(box)
 
         for k,v in target_attribs.items():
             target_attribs[k] = torch.stack(v)
@@ -342,32 +311,8 @@ class DetectorAndClassifier(nn.Module):
                 print(pred_attribs[k])
                 raise ValueError("not squeezed")
 
-        # print('target_attribs', target_attribs)
-        # print('pred_attribs', pred_attribs)
-        # exit()
 
         return target_attribs, pred_attribs, false_pos, false_neg, num_gts
-
-        # # Process each image in the batch
-        # batch_size = images.shape[0]
-        # output_classifications = []
-        # for i in range(batch_size):
-        #     # Get the highest confidence bounding box for each image
-        #     # Here we assume one object per image for simplicity
-        #     boxes = detections[i]['boxes']
-        #     scores = detections[i]['scores']
-        #     _, max_idx = torch.max(scores, 0)
-        #     best_box = [boxes[max_idx].unsqueeze(0)]  # Add batch dim
-
-        #     # Crop using ROI Align
-        #     cropped_image = roi_align(images[i].unsqueeze(0), best_box, output_size=self.crop_size)
-            
-        #     # Classify the cropped image
-        #     classification = self.classifier(cropped_image)
-        #     output_classifications.append(classification)
-
-        # # Assuming we're dealing with batch size of 1 for simplicity; adjust as needed
-        # return torch.cat(output_classifications, 0)
     
 def get_transform(train):
     transforms = []
