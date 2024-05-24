@@ -1,5 +1,6 @@
 # INFO
 
+reading the Faster R-CNN paper beforehand would be good to better understand the modifications that are made
 conda environment can be recreated from frcnn_environment.yml
 images should be stored in 'data/combined/images/'
 annotations should be stored in 'data/'
