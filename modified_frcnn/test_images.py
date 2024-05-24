@@ -22,6 +22,10 @@ def get_transform():
     return T.Compose(transforms)
 
 def test_images(job_id=None, epoch_no=None):
+    '''
+    Function to load a trained model and test it on a set of images,
+    with the aim being to obtain the model's performance metrics on the test set.
+    '''
 
     # location of annotations file and dataset root folder
     annotations_filepath = 'data/mapped_combined_annotations.json'

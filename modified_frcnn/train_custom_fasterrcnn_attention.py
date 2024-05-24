@@ -33,6 +33,12 @@ def get_transform(train):
     return T.Compose(transforms)
 
 def main():
+    '''
+    Function that trains a modified Faster R-CNN model. Flags can be adjusted in the lines below this to
+    modify the model. Model draws from images from  the `root` folder and annotations from `annotations_filepath`.
+    Various files are saved during the training process, e.g. checkpoints, metrics, and a config file to recreate the model.
+    '''
+    
     # location of annotations file
     annotations_filepath = 'data/mapped_combined_annotations.json'
     print(f"loading annotations from '{annotations_filepath}'")

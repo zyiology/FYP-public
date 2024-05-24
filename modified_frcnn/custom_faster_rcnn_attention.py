@@ -37,7 +37,6 @@ from coco_eval import CocoEvaluator
 # main class for modified Faster R-CNN
 class CustomFasterRCNN(FasterRCNN):
 
-    
     def __init__(self, backbone, num_classes=None, attribute_mappings=None, attribute_weights_dict=None, 
                  num_heads = 2, use_attention=True, attention_per_attrib=True, custom_box_predictor=False,  
                  use_reduced_features_for_attrib=False, parallel_backbone=None, **kwargs):

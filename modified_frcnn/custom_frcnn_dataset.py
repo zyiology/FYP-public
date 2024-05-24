@@ -10,6 +10,20 @@ from torchvision.transforms.v2 import functional as F
 import os
 
 class CustomFRCNNAttentionDataset(torch.utils.data.Dataset):
+    '''
+    Class defining a custom dataset for use with the modified faster rcnn model.
+    Importantly, defines attributes for each bounding box.
+    Args:
+        root (str): root directory of dataset
+        transforms (torchvision.transforms): transforms to apply to images and targets
+        annotations_path (str): path to COCO annotations file
+        attrib_mappings (dict[dict[str, int]]): dictionary of attribute classes to their integer values
+        classes (list[str]): list of class names
+        exclude (list[int]): list of image ids to exclude
+        offset (int): offset to add to image ids
+        ignore_occluded (bool): whether to ignore occluded annotations (each annotation has a default attribute 'occluded')
+    '''
+
     def __init__(self, root, transforms, annotations_path, attrib_mappings=None, classes=None, exclude=None, offset=0, ignore_occluded=True):
         if exclude is None:
             exclude = []

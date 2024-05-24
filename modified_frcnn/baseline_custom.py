@@ -29,6 +29,12 @@ from inception.inception_resnet_v2 import Inception_ResNetv2_multitask
 
 @torch.inference_mode()
 def main():
+    '''
+    Main function to evaluate the baseline model.
+    Modify the job ids and epochs to evaluate different models.
+    Evaluates the models separately at first, then evaluates the combined model.
+    '''
+
     # uses job ids and epochs to find corresponding checkpoint file
     detector_job_id = 215575
     detector_epoch = 24

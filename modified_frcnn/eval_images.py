@@ -21,6 +21,10 @@ def get_transform(train):
     return T.Compose(transforms)
 
 def eval_images(job_id=None, epoch_no=None):
+    '''
+    Function to load a trained model and test it on a set of images,
+    with the aim being to visually inspect the model's output on the test set.
+    '''
 
     annotations_filepath = 'data/mapped_combined_annotations.json'
     num_classes = 2

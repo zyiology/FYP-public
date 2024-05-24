@@ -6,6 +6,15 @@ import math
 from typing import Any
 
 class AttribEvaluator:
+    '''
+    Evaluates attribute prediction performance for a given attribute.
+    Calculates precision, recall, and f1 score for each class, as well as weighted averages.
+
+    Can also calculate overall metrics (i.e. simulated usage of the model) for the dataset.
+    Calculates false positives, false negatives, and mean labels per image.
+    And also precision, recall, and f1 score similar to above.
+    '''
+    
     def __init__(self, target_attribute, attrib_mapping, calc_overall_metrics=False, iou_threshold=0.5, score_threshold=0.7):
         self.target_attribute = target_attribute
         self.iou_threshold = iou_threshold # minimum iou required to count as a positive match

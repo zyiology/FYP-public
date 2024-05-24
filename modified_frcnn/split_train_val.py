@@ -11,6 +11,12 @@ import random
 from itertools import combinations 
 
 def main():
+    '''
+    Function to split the dataset into train, validation, and test sets.
+    Adjust n_folds and proportions to change the number of folds and the desired proportions of the splits.
+    Each fold is a subset of the dataset with a similar distribution of labels. Folds generally have different sizes,
+    and combinations of folds are iteratively tested to find the best combination that approximates the desired proportions.
+    '''
  
     annotations_filepath = 'data/mapped_combined_annotations.json'
     root = 'data/combined'
@@ -21,6 +27,13 @@ def main():
     seed = 420
     generator = torch.Generator().manual_seed(seed)
     print(f"setting torch random seed to {seed}")
+
+    # number of folds to split the dataset into - more folds generally gives results closer
+    # to the desired proportions, but takes longer to run 
+    n_folds = 16
+
+    # desired proportions for training, validation, and test sets
+    proportions = [0.7, 0.1, 0.2]
 
     raw_dataset = CustomFRCNNAttentionDataset(
         root,
@@ -59,12 +72,11 @@ def main():
     # use iterative stratification to split the dataset
     # produces 16 "folds" of the dataset, each with a similar distribution of labels
     # then finds the best combination of folds to approximate the desired proportions
-    folds, fold_distributions = iterative_stratification(image_multilabel_dict, 16)
+    folds, fold_distributions = iterative_stratification(image_multilabel_dict, n_folds)
 
     fold_lens = [len(f) for f in folds]
     print('folds lengths', fold_lens)
 
-    proportions = [0.7, 0.1, 0.2]  # Desired proportions for training, validation, test
     train_ids, val_ids, test_ids = find_best_fold_combination(folds, proportions, fold_distribution=fold_distributions)
 
     print(f"Training samples: {len(train_ids)}")

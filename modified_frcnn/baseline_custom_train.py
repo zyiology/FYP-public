@@ -31,6 +31,12 @@ from custom_frcnn_dataset import CustomFRCNNAttentionDataset
 from attrib_eval import print_confusion_matrix
 
 def main():
+    '''
+    Function to train the separate components of the baseline model.
+    For the detector, the model is trained on the bounding box annotations.
+    For the classifier, the ground truth bounding boxes are used to crop the images,
+    and the model is trained on the cropped images with the corresponding attribute labels.
+    '''
 
     JOB_ID = sys.argv[1]
 
