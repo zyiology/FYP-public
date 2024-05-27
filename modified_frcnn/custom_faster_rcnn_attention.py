@@ -923,8 +923,8 @@ def fastrcnn_loss_with_attributes(class_logits, attribute_logits_dict, box_regre
             continue
 
         ce_loss = F.cross_entropy(attrib_logits, attrib, reduction='none')
-        if math.isnan(ce_loss):
-            continue
+        # if math.isnan(ce_loss):
+        #     continue
 
         pt = torch.exp(-ce_loss)
 

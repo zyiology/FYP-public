@@ -1,7 +1,8 @@
 ### TRAINING SCRIPT FOR CUSTOM FASTER R-CNN WITH ATTENTION ###
 # Modifications can be selected by toggling the flags at the start of the script
 # Made for running on a slurm cluster - specifically, with jobID generated from running on the cluster
-# jobID has to be provided as argument when calling this script otherwise
+# jobID has to be provided as argument when calling this script otherwise returns error
+# jobID is used to create folder to save outputs
 
 import json
 import math
@@ -32,7 +33,7 @@ def get_transform(train):
     transforms.append(T.ToPureTensor())
     return T.Compose(transforms)
 
-def main():
+def main(job_id):
     '''
     Function that trains a modified Faster R-CNN model. Flags can be adjusted in the lines below this to
     modify the model. Model draws from images from  the `root` folder and annotations from `annotations_filepath`.
@@ -208,7 +209,7 @@ def main():
     print("attribute_weights_dict", attribute_weights_dict)
 
     # save flags for this run into a file, so they can be used to reconstruct model for testing
-    log_folder = os.path.join('logs', sys.argv[1])
+    log_folder = os.path.join('logs', job_id)
     os.makedirs(log_folder)
     config = {
         "use_attention": use_attention,
@@ -241,7 +242,7 @@ def main():
 
     # if logging, create tensorboard writer
     if logging:
-        runs_directory = os.path.join('runs', sys.argv[1])
+        runs_directory = os.path.join('runs', job_id)
         writer = SummaryWriter(runs_directory)
 
     # create model
@@ -284,12 +285,12 @@ def main():
     )
 
     # where to save the evaluation image (single image from validation set, for visual inspection)
-    subfolder = os.path.join("eval_image", f"{sys.argv[1]}")
+    subfolder = os.path.join("eval_image", f"{job_id}")
     os.makedirs(subfolder)
 
     # where to save checkpoints
     if save_checkpoints:
-        checkpoints_folder = os.path.join("checkpoints", f"{sys.argv[1]}")
+        checkpoints_folder = os.path.join("checkpoints", f"{job_id}")
         os.makedirs(checkpoints_folder)
 
     # number of attributes being predicted
@@ -341,7 +342,7 @@ def main():
 
     # plot metrics
     metrics_folder = 'metrics'
-    metrics_file = os.path.join(metrics_folder, f"{sys.argv[1]}.png")
+    metrics_file = os.path.join(metrics_folder, f"{job_id}.png")
 
     x = np.arange(len(mAPs))
     plt.plot(x, mAPs, label='mAPs', marker='o')
@@ -365,12 +366,17 @@ if __name__ == "__main__":
 
     print("running train_custom_fasterrcnn_attention.py")
 
+    try:
+        job_id = sys.argv[1]
+    except:
+        raise ValueError("please provide a job ID as the first argument")
+
     server = True # on slurm cluster, job output is automatically routed to file
     if server:
-        main()
+        main(job_id)
     else:
         # manually route output to file if not on slurm cluster
         # could be modified to increment jobIDs automatically and save to different files
         with open('.output.log', 'w') as f:
             sys.stdout = f
-            main()
+            main(job_id)

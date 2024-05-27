@@ -16,6 +16,10 @@ def main():
     Adjust n_folds and proportions to change the number of folds and the desired proportions of the splits.
     Each fold is a subset of the dataset with a similar distribution of labels. Folds generally have different sizes,
     and combinations of folds are iteratively tested to find the best combination that approximates the desired proportions.
+
+    Iterative stratification is meant to be used for multilabelled data - i.e. an object can have multiple labels, like a ball can be round and red
+    Strictly speaking the buildings are not pure multilabelled data, as it can only contain 1 value for each attribute and the attributes are separate
+    But we can treat each combination of attribute_name,attribute_value as a separate label, and use iterative stratification to split the dataset
     '''
  
     annotations_filepath = 'data/mapped_combined_annotations.json'
@@ -205,6 +209,7 @@ def find_best_fold_combination(folds, proportions, fold_distribution=None):
             counter = Counter()
             for i in split:
                 counter.update(fold_distribution[i])
+            # print the number of each label for user to evaluate visually if the splits are fair
             print(sorted(counter.items(), key=lambda x: x[0]))
     return best_splits[0]
 

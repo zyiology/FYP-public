@@ -11,12 +11,14 @@ eval_images.py does the same, but plots the predictions on the images instead of
 
 train_custom_fasterrcnn_attention.py is used to train the model
 modifications can be toggled on/off
+(sample submit.sh is provided to run this script on a slurm cluster))
 
 baseline_custom_train.py is used to train the baseline model
 baseline_custom.py is used to test the trained baseline model on the test set
 
 split_train_val.py implements the iterative stratification algorithm to stratify the dataset by attribute labels
 outputs train_ids.txt, val_ids.txt, and test_ids.txt to data/
+(sample train/val/test splits are provided in data/)
 
 ALL SCRIPTS WERE RUN ON A SLURM CLUSTER, using sbatch to submit scripts
 SCRIPTS SHOULD BE CALLED with the job ID as the first argument, e.g. python test_images.py 12345
@@ -34,6 +36,8 @@ attrib_eval.py contains the code to evaluate attribute prediction performance an
 attrib_mappings.json contains the attributes that will be processed
 (need to map the attribute strings to numbers for ease of processing)
 (refer to attrib_mappings_backup.json for the full list)
+
+data/mapped_combined_annotations.json contains the annotations for the combined dataset (mapillary+gmaps part 1)
 
 # EXTRA NOTES
 
