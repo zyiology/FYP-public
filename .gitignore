@@ -1,6 +1,8 @@
 modified_frcnn/data/combined/*
 modified_frcnn/runs/*
 modified_frcnn/logs/*
+modified_frcnn/checkpoints/*
+modified_frcnn/eval_image/*
 
 # Created by .ignore support plugin (hsz.mobi)
 ### Python template

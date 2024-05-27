@@ -1009,7 +1009,7 @@ def evaluate(model, data_loader, device, eval_attrib=True, calc_overall_metrics=
         model_time = time.time()
 
         with torch.no_grad():
-            losses, outputs = model(images, targets, eager_output=False)
+            outputs = model(images, targets)
 
         # send to cpu for ease of processing
         def sendToCpu(output_dict):

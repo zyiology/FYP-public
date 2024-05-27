@@ -72,6 +72,7 @@ def main(job_id):
 
     exclude = None # can be list of image ids to exclude from training (to speed up testinig)
     trainable_backbone_layers = 5 # range from 0 to 5 for resnet, lower values to lock more layers
+    train_batch_size = 1 # batch size for training, can be increased if GPU memory allows
 
     # during each validation phase, model is tested on a single image and the image is saved to disk
     # for visual inspection. because there may be multiple attributes that are predicted, 
@@ -237,8 +238,8 @@ def main(job_id):
             f.write(",".join(val_ids))
 
     # load data into dataloaders
-    train_dataloader = DataLoader(train_dataset, batch_size=2, shuffle=True, collate_fn=utils.collate_fn)
-    validation_dataloader = DataLoader(val_dataset, batch_size=2, shuffle=False, collate_fn=utils.collate_fn)
+    train_dataloader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True, collate_fn=utils.collate_fn)
+    validation_dataloader = DataLoader(val_dataset, batch_size=1, shuffle=False, collate_fn=utils.collate_fn)
 
     # if logging, create tensorboard writer
     if logging:
