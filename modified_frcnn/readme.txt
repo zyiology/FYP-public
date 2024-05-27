@@ -2,7 +2,7 @@
 
 reading the Faster R-CNN paper beforehand would be good to better understand the modifications that are made
 conda environment can be recreated from frcnn_environment.yml
-images should be stored in 'data/combined/images/'
+images should be stored in 'data/combined/images/' (to use the sample train/val/test splits provided in data/, the images from mapillary and GSV_part1 should be pasted into that folder)
 annotations should be stored in 'data/'
 
 # SCRIPTS THAT ARE MEANT TO BE RUN
